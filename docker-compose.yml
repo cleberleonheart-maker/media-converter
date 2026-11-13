@@ -1,0 +1,41 @@
+services:
+  media-converter:
+    build: .
+    init: true
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      MEDIA_CONVERTER_ALLOWED_HOSTS: "youtube.com,youtu.be,vimeo.com,dailymotion.com,twitch.tv,facebook.com,fb.watch,instagram.com,tiktok.com,twitter.com,x.com,reddit.com,soundcloud.com,bilibili.com,odysee.com,rumble.com,streamable.com,coub.com,nicovideo.jp,linkedin.com"
+      MEDIA_CONVERTER_TRUSTED_HOSTS: "localhost,127.0.0.1,[::1]"
+      MEDIA_CONVERTER_MAX_UPLOAD_BYTES: "2147483648"
+      MEDIA_CONVERTER_MAX_PENDING_JOBS: "10"
+      MEDIA_CONVERTER_MAX_RETAINED_JOBS: "100"
+      MEDIA_CONVERTER_DOWNLOAD_TOTAL_TIMEOUT_SECONDS: "43200"
+      MEDIA_CONVERTER_CONVERSION_TIMEOUT_SECONDS: "43200"
+      TMPDIR: "/app/data/tmp"
+    volumes:
+      - converter-data:/app/data
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 2g
+    cpus: 2.0
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  converter-data:

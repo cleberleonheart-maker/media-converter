@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Converta vídeos e áudios de arquivos locais ou links.">
+    <title>Media Converter</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="Media Converter">
+        <span class="brand-mark" aria-hidden="true">M</span>
+        <span>Media Converter</span>
+      </a>
+      <span class="status-pill"><span class="status-dot"></span>Processamento local</span>
+    </header>
+
+    <main class="container">
+      <section class="hero">
+        <p class="eyebrow">Conversão simples e rápida</p>
+        <h1>Seu vídeo, no formato ideal.</h1>
+        <p class="hero-copy">Envie um arquivo ou cole um link do YouTube e outras plataformas. Escolha o formato e converta.</p>
+      </section>
+
+      <section class="workspace" aria-labelledby="workspace-title">
+        <div class="panel controls-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="step">01</p>
+              <h2 id="workspace-title">Escolha a origem</h2>
+            </div>
+          </div>
+
+          <div class="tabs" role="tablist" aria-label="Origem do arquivo">
+            <button class="tab is-active" id="tab-upload" type="button" role="tab" aria-selected="true" aria-controls="panel-upload" data-source-tab="upload">Arquivo local</button>
+            <button class="tab" id="tab-url" type="button" role="tab" aria-selected="false" aria-controls="panel-url" data-source-tab="url">Link de vídeo</button>
+          </div>
+
+          <div class="tab-panel" id="panel-upload" role="tabpanel" aria-labelledby="tab-upload">
+            <label class="drop-zone" id="drop-zone" for="file-input">
+              <input id="file-input" name="file" type="file" accept="video/*,audio/*,.mkv,.mov,.avi,.webm,.mp4,.m4v,.ts,.wmv,.flv">
+              <span class="upload-icon" aria-hidden="true">↑</span>
+              <strong id="file-label">Arraste um vídeo ou clique para escolher</strong>
+              <span>MP4, WebM, MKV, MOV, AVI, MP3 e outros</span>
+            </label>
+          </div>
+
+          <div class="tab-panel is-hidden" id="panel-url" role="tabpanel" aria-labelledby="tab-url" hidden>
+            <label class="field-label" for="url-input">Link do vídeo</label>
+            <div class="url-field">
+              <span aria-hidden="true">↗</span>
+              <input id="url-input" type="url" inputmode="url" placeholder="https://youtube.com/watch?v=..." autocomplete="url">
+            </div>
+            <p class="field-hint">YouTube, Vimeo, Dailymotion, Twitch e outras plataformas suportadas.</p>
+          </div>
+
+          <div class="panel-heading options-heading">
+            <div>
+              <p class="step">02</p>
+              <h2>Defina a saída</h2>
+            </div>
+          </div>
+
+          <div class="options-grid">
+            <label class="select-field">
+              <span>Formato</span>
+              <select id="format-select" name="output_format">
+                <option value="mp4">MP4 — vídeo</option>
+                <option value="webm">WebM — vídeo</option>
+                <option value="mkv">MKV — vídeo</option>
+                <option value="mp3">MP3 — áudio</option>
+                <option value="m4a">M4A — áudio</option>
+                <option value="wav">WAV — áudio</option>
+              </select>
+            </label>
+            <label class="select-field">
+              <span>Qualidade</span>
+              <select id="quality-select" name="quality">
+                <option value="original">Sem redimensionamento</option>
+                <option value="high">Alta — até 1080p</option>
+                <option value="medium">Média — até 720p</option>
+                <option value="low">Baixa — até 480p</option>
+              </select>
+            </label>
+          </div>
+
+          <button class="convert-button" id="convert-button" type="button">
+            <span>Converter agora</span>
+            <span aria-hidden="true">→</span>
+          </button>
+          <p class="form-error" id="form-error" role="alert" hidden></p>
+        </div>
+
+        <div class="panel jobs-panel">
+          <div class="panel-heading jobs-heading">
+            <div>
+              <p class="step">03</p>
+              <h2>Suas conversões</h2>
+            </div>
+            <span class="job-count" id="job-count">0</span>
+          </div>
+          <p class="form-error jobs-error" id="load-error" role="alert" hidden></p>
+          <div class="jobs-list" id="jobs-list" aria-live="polite">
+            <div class="empty-state" id="empty-state">
+              <span class="empty-icon" aria-hidden="true">↓</span>
+              <strong>Nenhuma conversão ainda</strong>
+              <p>Seus arquivos aparecerão aqui com o progresso e botão de download.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <p>Os arquivos ficam apenas neste servidor e são removidos automaticamente após 24 horas.</p>
+    </footer>
+
+    <template id="job-template">
+      <article class="job-card">
+        <div class="job-icon" aria-hidden="true">▶</div>
+        <div class="job-body">
+          <div class="job-title-row">
+            <div>
+              <strong class="job-name"></strong>
+              <span class="job-meta"></span>
+            </div>
+            <span class="job-status"></span>
+          </div>
+          <div class="progress-track" role="progressbar" aria-label="Progresso da conversão" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="0%"><span class="progress-bar"></span></div>
+          <div class="job-actions">
+            <span class="job-message"></span>
+            <div class="job-buttons">
+              <button class="text-button cancel-button" type="button">Cancelar</button>
+              <button class="text-button remove-button" type="button" aria-label="Remover conversão" hidden>Remover</button>
+              <a class="download-button" hidden>Baixar arquivo</a>
+            </div>
+          </div>
+        </div>
+      </article>
+    </template>
+  </body>
+</html>
