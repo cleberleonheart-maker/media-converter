@@ -9,7 +9,7 @@ import shutil
 import signal
 import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -217,6 +217,7 @@ class JobStore:
         self.active_downloads: dict[str, int] = {}
         self._download_lock = threading.Lock()
         self.semaphore = asyncio.Semaphore(config.max_concurrent_jobs)
+        self.on_finished: Callable[[Job], None] | None = None
 
     def can_accept_job(self) -> bool:
         pending_jobs = sum(job.status in ACTIVE_JOB_STATUSES for job in self.jobs.values())
@@ -270,6 +271,8 @@ class JobStore:
         for key, value in changes.items():
             setattr(job, key, value)
         job.updated_at = datetime.now(UTC)
+        if changes.get("status") in {JobStatus.COMPLETED, JobStatus.FAILED} and self.on_finished:
+            self.on_finished(job)
 
     def list_jobs(self) -> list[Job]:
         return sorted(self.jobs.values(), key=lambda job: job.created_at, reverse=True)

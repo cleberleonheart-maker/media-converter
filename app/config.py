@@ -47,6 +47,9 @@ class Settings:
     google_allowed_domains: tuple[str, ...] = ()
     session_secret: str = ""
     session_ttl_seconds: int = 24 * 60 * 60
+    vapid_public_key: str = ""
+    vapid_private_key: str = ""
+    vapid_subject: str = "mailto:admin@localhost"
     login_max_failures: int = 20
     login_failure_window_seconds: int = 600
     allow_private_hosts: bool = False
@@ -172,6 +175,15 @@ class Settings:
                     str(defaults.login_failure_window_seconds),
                 )
             ),
+            vapid_public_key=os.getenv(
+                "MEDIA_CONVERTER_VAPID_PUBLIC_KEY", defaults.vapid_public_key
+            ).strip(),
+            vapid_private_key=os.getenv(
+                "MEDIA_CONVERTER_VAPID_PRIVATE_KEY", defaults.vapid_private_key
+            ).strip(),
+            vapid_subject=os.getenv(
+                "MEDIA_CONVERTER_VAPID_SUBJECT", defaults.vapid_subject
+            ).strip(),
             allow_private_hosts=os.getenv("MEDIA_CONVERTER_ALLOW_PRIVATE_HOSTS", "").strip().lower()
             in {"1", "true", "yes", "on"},
             download_timeout_seconds=int(

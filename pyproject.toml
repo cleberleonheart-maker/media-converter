@@ -16,6 +16,10 @@ no_implicit_optional = true
 module = ["yt_dlp.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["pywebpush.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

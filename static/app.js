@@ -45,6 +45,7 @@ const elements = {
   googleButton: document.querySelector("#google-button"),
   logoutButton: document.querySelector("#logout-button"),
   installButton: document.querySelector("#install-button"),
+  notifyButton: document.querySelector("#notify-button"),
 };
 
 const statusLabels = {
@@ -613,6 +614,62 @@ elements.jobsList.addEventListener("click", (event) => {
   else removeJob(jobId, button);
 });
 
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = window.atob(base64);
+  return Uint8Array.from([...raw].map((character) => character.charCodeAt(0)));
+}
+
+async function enableNotifications() {
+  if (!("Notification" in window) || !("serviceWorker" in navigator)) {
+    showError("Este navegador não suporta notificações push.");
+    return;
+  }
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    showError("Permissão de notificação não concedida.");
+    return;
+  }
+  try {
+    const config = await request("/api/push/key");
+    if (!config.enabled) {
+      showError("As notificações push não estão configuradas no servidor.");
+      return;
+    }
+    const registration = await navigator.serviceWorker.ready;
+    const existing = await registration.pushManager.getSubscription();
+    const subscription =
+      existing ||
+      (await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(config.public_key),
+      }));
+    await request("/api/push/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(subscription.toJSON()),
+    });
+    if (elements.notifyButton) elements.notifyButton.hidden = true;
+    await request("/api/push/test", { method: "POST" });
+  } catch (error) {
+    showError(error.message || "Não foi possível ativar as notificações.");
+  }
+}
+
+async function setupNotifications() {
+  if (!elements.notifyButton || !("Notification" in window) || !("serviceWorker" in navigator)) {
+    return;
+  }
+  if (Notification.permission === "granted") {
+    const registration = await navigator.serviceWorker.getRegistration();
+    const subscription = registration ? await registration.pushManager.getSubscription() : null;
+    if (!subscription) elements.notifyButton.hidden = false;
+    return;
+  }
+  elements.notifyButton.hidden = false;
+}
+
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   window.addEventListener("load", () => {
@@ -644,6 +701,8 @@ setSource("upload");
 syncQualityAvailability();
 registerServiceWorker();
 setupInstallPrompt();
+setupNotifications();
+elements.notifyButton?.addEventListener("click", enableNotifications);
 checkAuth().then((authenticated) => {
   if (authenticated) loadInitialJobs();
 });

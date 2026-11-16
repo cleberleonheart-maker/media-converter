@@ -17,6 +17,7 @@ Aplicação web para converter arquivos locais, links diretos ou vídeos online 
 - Limites de fila, duração, resolução, tamanho de entrada e tamanho de saída.
 - Login com Google (sessão em cookie `HttpOnly`) com rate limiting e log de tentativas negadas.
 - Instalável como aplicativo web (PWA): "Adicionar à tela inicial" no celular.
+- Notificações Web Push no celular quando a conversão termina ou falha.
 
 ## Execução com Docker
 
@@ -75,6 +76,9 @@ Acesse `http://localhost:8000`. A documentação interativa da API fica em `http
 | `MEDIA_CONVERTER_SESSION_TTL_SECONDS` | `86400` | Validade da sessão em segundos |
 | `MEDIA_CONVERTER_LOGIN_MAX_FAILURES` | `20` | Tentativas de login com Google aceitas por origem antes do bloqueio temporário |
 | `MEDIA_CONVERTER_LOGIN_FAILURE_WINDOW_SECONDS` | `600` | Janela, em segundos, usada para contar as falhas de login |
+| `MEDIA_CONVERTER_VAPID_PUBLIC_KEY` | vazio | Chave pública VAPID usada nas notificações Web Push |
+| `MEDIA_CONVERTER_VAPID_PRIVATE_KEY` | vazio | Chave privada VAPID usada para enviar as notificações |
+| `MEDIA_CONVERTER_VAPID_SUBJECT` | `mailto:admin@localhost` | Contato enviado ao serviço de push (`mailto:`) |
 
 Para permitir outra plataforma no yt-dlp, adicione o domínio à lista. Hosts públicos com extensão de mídia são aceitos como link direto; um host desconhecido sem extensão compatível é rejeitado.
 
@@ -163,6 +167,29 @@ MEDIA_CONVERTER_GOOGLE_ALLOWED_DOMAINS=gmail.com
 ```
 
 O frontend usa o Google Identity Services, envia o ID token ao backend, que valida a credencial, cria uma sessão assinada (cookie `HttpOnly`) e libera a API. `MEDIA_CONVERTER_GOOGLE_ALLOWED_DOMAINS` é opcional e restringe o acesso a determinados domínios de e-mail. Aceita domínios (`gmail.com`) ou e-mails exatos (`cleberleonheart@gmail.com`), separados por vírgula.
+
+### Notificações push
+
+Com o aplicativo instalado (PWA), o botão **Notificações** no cabeçalho registra o dispositivo e habilita avisos quando a conversão termina ou falha, mesmo com a tela bloqueada.
+
+As chaves VAPID podem ser geradas localmente:
+
+```bash
+python3 - <<'PY'
+import base64
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+
+key = ec.generate_private_key(ec.SECP256R1())
+private = key.private_numbers().private_value.to_bytes(32, "big")
+public = key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+b64 = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+print("MEDIA_CONVERTER_VAPID_PUBLIC_KEY=" + b64(public))
+print("MEDIA_CONVERTER_VAPID_PRIVATE_KEY=" + b64(private))
+PY
+```
+
+Configure as duas chaves e o contato (`MEDIA_CONVERTER_VAPID_SUBJECT=mailto:seu-email@exemplo.com`). As assinaturas dos dispositivos ficam em `data/push-subscriptions.json` (permissão `600`) e assinaturas expiradas são removidas automaticamente.
 
 ### Autenticação básica
 

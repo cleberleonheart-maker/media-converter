@@ -30,6 +30,7 @@ from .auth import (
 from .config import Settings, settings
 from .jobs import Job, JobCapacityError, JobService, JobStatus, JobStore
 from .media import FORMATS, OutputFormat, Quality, sanitize_filename
+from .push import PushService
 from .url_validation import (
     UrlValidationError,
     http_error_for_url,
@@ -144,7 +145,13 @@ class AuthMiddleware:
     def _is_public_path(self, path: str) -> bool:
         if not path.startswith("/api/"):
             return True
-        return path in {"/api/health", "/api/auth/config", "/api/auth/google", "/api/auth/logout"}
+        return path in {
+            "/api/health",
+            "/api/auth/config",
+            "/api/auth/google",
+            "/api/auth/logout",
+            "/api/push/key",
+        }
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -239,10 +246,17 @@ class JobResponse(BaseModel):
 def build_app(config: Settings = settings) -> FastAPI:
     store = JobStore(config)
     service = JobService(config, store)
+    push = PushService(config)
     login_limiter = LoginRateLimiter(
         config.login_max_failures,
         config.login_failure_window_seconds,
     )
+
+    def notify_finished(job: Job) -> None:
+        task = asyncio.create_task(push.notify_job(job))
+        store.tasks.setdefault(job.id, task)
+
+    store.on_finished = notify_finished
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -336,6 +350,69 @@ def build_app(config: Settings = settings) -> FastAPI:
         response = JSONResponse({"authenticated": False})
         response.delete_cookie(SESSION_COOKIE_NAME, path="/")
         return response
+
+    @app.get("/api/push/key")
+    async def push_key() -> dict[str, Any]:
+        return {
+            "enabled": push.enabled,
+            "public_key": config.vapid_public_key if push.enabled else "",
+        }
+
+    @app.post("/api/push/subscribe", status_code=status.HTTP_201_CREATED)
+    async def push_subscribe(request: Request) -> dict[str, Any]:
+        if not push.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="As notificações push não estão configuradas.",
+            )
+        try:
+            payload = await request.json()
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Requisição inválida.",
+            ) from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Requisição inválida.",
+            )
+        try:
+            push.subscribe(payload)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        return {"subscribed": True}
+
+    @app.post("/api/push/unsubscribe")
+    async def push_unsubscribe(request: Request) -> dict[str, Any]:
+        try:
+            payload = await request.json()
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Requisição inválida.",
+            ) from exc
+        endpoint = payload.get("endpoint") if isinstance(payload, dict) else None
+        if not isinstance(endpoint, str) or not endpoint:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Assinatura de notificação inválida.",
+            )
+        push.unsubscribe(endpoint)
+        return {"subscribed": False}
+
+    @app.post("/api/push/test")
+    async def push_test() -> dict[str, Any]:
+        if not push.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="As notificações push não estão configuradas.",
+            )
+        await push.send("Media Converter", "Notificações funcionando.", "/")
+        return {"sent": True}
 
     app.add_middleware(
         RequestBodyLimitMiddleware,
