@@ -99,8 +99,10 @@ O acesso fica restrito à tailnet, com HTTPS e certificado válido, sem expor po
 
 ```bash
 sudo tailscale up --hostname media-converter --ssh=false
-sudo tailscale serve --bg --https=443 http://127.0.0.1:8000
+sudo tailscale serve --bg --https=443 http://100.113.132.11:8000
 ```
+
+O serviço precisa escutar no IP do Tailscale para ser acessível direto pela tailnet (por exemplo `http://100.113.132.11:8000`), sem depender de MagicDNS nem de TLS.
 
 Adicione o nome e o IP do nó em `MEDIA_CONVERTER_TRUSTED_HOSTS` (por exemplo `media-converter.tail045fd4.ts.net,100.113.132.11`). Em containers LXC sem device TUN, habilite o modo túnel do tailscaled:
 
