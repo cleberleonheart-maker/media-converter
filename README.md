@@ -91,7 +91,30 @@ MEDIA_CONVERTER_YTDLP_JS_RUNTIMES=node:/usr/bin/node
 
 São aceitos Node 22 ou superior e Deno 2.3 ou superior. Sem runtime, vídeos bloqueados por idade podem falhar mesmo com cookies válidos.
 
-## Exposição pública
+## Exposição do serviço
+
+### Tailscale (recomendado)
+
+O acesso fica restrito à tailnet, com HTTPS e certificado válido, sem expor portas na internet:
+
+```bash
+sudo tailscale up --hostname media-converter --ssh=false
+sudo tailscale serve --bg --https=443 http://127.0.0.1:8000
+```
+
+Adicione o nome e o IP do nó em `MEDIA_CONVERTER_TRUSTED_HOSTS` (por exemplo `media-converter.tail045fd4.ts.net,100.113.132.11`). Em containers LXC sem device TUN, habilite o modo túnel do tailscaled:
+
+```bash
+sudo systemctl edit tailscaled
+```
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641 --tun=tailscale
+```
+
+### Autenticação básica
 
 Defina `MEDIA_CONVERTER_AUTH_USER` e `MEDIA_CONVERTER_AUTH_PASSWORD` para exigir autenticação básica em todas as rotas, exceto `/api/health`:
 
@@ -100,13 +123,17 @@ MEDIA_CONVERTER_AUTH_USER=admin
 MEDIA_CONVERTER_AUTH_PASSWORD=uma-senha-forte
 ```
 
+Use-a sempre que o serviço estiver exposto fora da tailnet.
+
+### Túnel público (Cloudflare)
+
 Em máquinas sem IP público direto, use um túnel HTTPS do Cloudflare, que só precisa de conexão de saída:
 
 ```bash
 cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8000
 ```
 
-Adicione o domínio do túnel em `MEDIA_CONVERTER_TRUSTED_HOSTS` (por exemplo `*.trycloudflare.com`). O endereço do túnel rápido muda a cada reinício; para um endereço fixo, use um túnel nomeado com domínio próprio.
+Adicione o domínio do túnel em `MEDIA_CONVERTER_TRUSTED_HOSTS` (por exemplo `*.trycloudflare.com`). O endereço do túnel rápido muda a cada reinício; para um endereço fixo, use um túnel nomeado com domínio próprio. Com túnel público, a autenticação básica é obrigatória.
 
 ## Segurança e limites
 
