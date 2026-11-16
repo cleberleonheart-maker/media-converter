@@ -48,6 +48,7 @@ Acesse `http://localhost:8000`. A documentação interativa da API fica em `http
 | `MEDIA_CONVERTER_TRUSTED_HOSTS` | `localhost,127.0.0.1,[::1]` | Hosts aceitos no cabeçalho `Host` |
 | `MEDIA_CONVERTER_ALLOW_PRIVATE_HOSTS` | `false` | Permite hosts privados; use somente em ambiente isolado |
 | `MEDIA_CONVERTER_MAX_CONCURRENT_JOBS` | `2` | Conversões simultâneas |
+| `MEDIA_CONVERTER_FFMPEG_THREADS` | `1` | Threads de codec por etapa do FFmpeg |
 | `MEDIA_CONVERTER_MAX_PENDING_JOBS` | `10` | Jobs simultâneos na fila ou em processamento |
 | `MEDIA_CONVERTER_MAX_RETAINED_JOBS` | `100` | Jobs retidos antes da limpeza |
 | `MEDIA_CONVERTER_MAX_DURATION_SECONDS` | `14400` | Duração máxima da mídia de origem |
@@ -61,6 +62,9 @@ Acesse `http://localhost:8000`. A documentação interativa da API fica em `http
 | `FFPROBE_BINARY` | `ffprobe` | Caminho do executável do FFprobe |
 | `YTDLP_BINARY` | `yt-dlp` | Caminho do executável do yt-dlp |
 | `MEDIA_CONVERTER_YTDLP_PROXY` | vazio | Proxy de saída usado pelo yt-dlp (http, https, socks4 ou socks5) |
+| `MEDIA_CONVERTER_YTDLP_COOKIES_FILE` | vazio | Arquivo `cookies.txt` no formato Netscape usado pelo yt-dlp |
+| `MEDIA_CONVERTER_YTDLP_COOKIES_FROM_BROWSER` | vazio | Perfil de navegador de onde o yt-dlp extrairá cookies |
+| `MEDIA_CONVERTER_YTDLP_JS_RUNTIMES` | vazio | Runtimes JavaScript usados pelo yt-dlp (ex.: `node:/usr/bin/node`, `deno`), separados por vírgula |
 
 Para permitir outra plataforma no yt-dlp, adicione o domínio à lista. Hosts públicos com extensão de mídia são aceitos como link direto; um host desconhecido sem extensão compatível é rejeitado.
 
@@ -68,16 +72,36 @@ Os limites de download e conversão são independentes: o primeiro controla cada
 
 `MEDIA_CONVERTER_ALLOW_PRIVATE_HOSTS=true` desativa a proteção contra endereços privados e locais. Use apenas em ambientes isolados e confiáveis.
 
+Para vídeos com confirmação de idade, configure uma destas opções:
+
+```bash
+chmod 600 /caminho/cookies.txt
+MEDIA_CONVERTER_YTDLP_COOKIES_FILE=/caminho/cookies.txt
+```
+
+O arquivo deve usar o formato Netscape `cookies.txt`. Alternativamente, use `MEDIA_CONVERTER_YTDLP_COOKIES_FROM_BROWSER=chromium` ou o perfil correspondente. As duas opções são mutuamente exclusivas. No Docker, monte o arquivo somente leitura dentro do container e aponte `MEDIA_CONVERTER_YTDLP_COOKIES_FILE` para o caminho montado.
+
+O YouTube exige que o yt-dlp resolva desafios JavaScript. Instale o pacote `yt-dlp-ejs` (já listado em `requirements.txt`) e informe um runtime compatível, por exemplo:
+
+```bash
+MEDIA_CONVERTER_YTDLP_JS_RUNTIMES=node:/usr/bin/node
+```
+
+São aceitos Node 22 ou superior e Deno 2.3 ou superior. Sem runtime, vídeos bloqueados por idade podem falhar mesmo com cookies válidos.
+
 ## Segurança e limites
 
 - Requisições `/api` aceitam apenas os hosts definidos em `MEDIA_CONVERTER_TRUSTED_HOSTS`.
 - O corpo das requisições é limitado mesmo quando não há cabeçalho `Content-Length`.
 - A fila tem cota e os arquivos de entrada são removidos após sucesso ou falha.
 - FFprobe e FFmpeg aceitam apenas uma lista de formatos de mídia; playlists e protocolos de rede são bloqueados.
-- A conversão restringe duração, resolução, threads, tamanho de saída e tempo de execução.
+- A conversão restringe duração, resolução, tamanho de saída e tempo de execução, com threads de codec limitadas por etapa.
+- A conversão seleciona apenas a primeira faixa de vídeo e a primeira de áudio, evitando faixas extras incompatíveis.
+- A fila é local ao processo; não execute réplicas compartilhando o mesmo volume de dados.
 - Links diretos validam DNS, redirects, HTTPS e o endereço efetivamente conectado.
-- O download direto resolve o host uma única vez, valida os endereços e conecta ao IP fixado, mantendo Host/SNI originais.
+- O download direto valida e fixa o IP de cada destino de redirecionamento, mantendo Host/SNI originais.
 - O yt-dlp realiza as próprias requisições e redirects. Para uso remoto, aplique uma política de egress que bloqueie redes internas e adicione autenticação e ownership por usuário. Defina `MEDIA_CONVERTER_YTDLP_PROXY` para encaminhar todo o tráfego do yt-dlp por um proxy de saída controlado.
+- Cookies do yt-dlp são credenciais sensíveis: use arquivo com permissão `600`, não versione seu conteúdo e monte-o somente leitura no container.
 - A API não implementa autenticação. Para acesso multiusuário, adicione autenticação,isolamento por proprietário, TLS, rate limiting e firewall de egress.
 
 ## Qualidade e formatos
@@ -87,7 +111,7 @@ A opção **Sem redimensionamento** mantém a resolução e, quando o codec de o
 | Formato | Vídeo | Áudio |
 | --- | --- | --- |
 | MP4 | H.264 | AAC |
-| WebM | VP9 | Opus |
+| WebM | VP8 | Opus |
 | MKV | H.264 | AAC |
 | MP3 | — | MP3 |
 | M4A | — | AAC |

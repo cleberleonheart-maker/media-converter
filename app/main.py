@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,9 +18,15 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from .config import Settings, settings
 from .jobs import Job, JobCapacityError, JobService, JobStatus, JobStore
 from .media import FORMATS, OutputFormat, Quality, sanitize_filename
-from .url_validation import UrlValidationError, http_error_for_url, validate_media_url_async
+from .url_validation import (
+    UrlValidationError,
+    http_error_for_url,
+    shutdown_resolvers,
+    validate_media_url_async,
+)
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+logger = logging.getLogger(__name__)
 
 
 class RequestBodyTooLarge(HTTPException):
@@ -152,6 +159,7 @@ def build_app(config: Settings = settings) -> FastAPI:
         cleanup_task.cancel()
         await asyncio.gather(cleanup_task, return_exceptions=True)
         await store.shutdown()
+        await shutdown_resolvers()
 
     app = FastAPI(
         title="Media Converter",
@@ -326,8 +334,11 @@ def build_app(config: Settings = settings) -> FastAPI:
 async def _cleanup_loop(store: JobStore) -> None:
     while True:
         await asyncio.sleep(3600)
-        store.cleanup_expired()
-        store.cleanup_orphans()
+        try:
+            store.cleanup_expired()
+            store.cleanup_orphans()
+        except Exception:
+            logger.exception("Falha ao limpar jobs expirados.")
 
 
 app = build_app()

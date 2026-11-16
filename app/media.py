@@ -175,25 +175,17 @@ def stream_copy_compatible(
     video = video_codec.lower()
     audio = audio_codec.lower()
     if output_format == OutputFormat.MP4:
-        return video == "h264" and audio in {"", "aac", "mp3"}
+        return video == "h264" and audio in {"", "aac"}
     if output_format == OutputFormat.MKV:
-        return video in {"h264", "vp8", "vp9", "av1"} and audio in {
-            "",
-            "aac",
-            "mp3",
-            "opus",
-            "vorbis",
-            "flac",
-            "ac3",
-        }
+        return video == "h264" and audio in {"", "aac"}
     if output_format == OutputFormat.WEBM:
-        return video in {"vp8", "vp9", "av1"} and audio in {"", "opus", "vorbis"}
+        return video == "vp8" and audio in {"", "opus"}
     if output_format == OutputFormat.MP3:
         return audio == "mp3"
     if output_format == OutputFormat.M4A:
         return audio == "aac"
     if output_format == OutputFormat.WAV:
-        return audio.startswith("pcm_")
+        return audio == "pcm_s16le"
     return False
 
 
@@ -203,7 +195,7 @@ def codec_options(output_format: OutputFormat) -> list[str]:
             "-c:v",
             "libx264",
             "-preset",
-            "veryfast",
+            "ultrafast",
             "-crf",
             "23",
             "-c:a",
@@ -214,15 +206,15 @@ def codec_options(output_format: OutputFormat) -> list[str]:
     if output_format == OutputFormat.WEBM:
         return [
             "-c:v",
-            "libvpx-vp9",
+            "libvpx",
             "-crf",
-            "32",
+            "24",
             "-b:v",
             "0",
-            "-row-mt",
-            "1",
+            "-deadline",
+            "realtime",
             "-cpu-used",
-            "4",
+            "8",
             "-c:a",
             "libopus",
             "-b:a",
@@ -233,7 +225,7 @@ def codec_options(output_format: OutputFormat) -> list[str]:
             "-c:v",
             "libx264",
             "-preset",
-            "veryfast",
+            "ultrafast",
             "-crf",
             "23",
             "-c:a",

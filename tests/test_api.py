@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import socket
 import tempfile
 from pathlib import Path
@@ -11,11 +12,16 @@ from app.config import Settings
 from app.main import build_app
 from app.media import OutputFormat, Quality, sanitize_filename
 from app.url_validation import (
+    _RESOLVER_MAX_CONCURRENT,
+    _RESOLVER_SLOTS,
     ResolvedUrl,
+    ResolverCapacityError,
     UrlValidationError,
+    http_error_for_url,
     is_private_address,
     pinned_connection,
     resolve_public_url,
+    resolve_public_url_async,
     validate_media_url,
 )
 
@@ -232,6 +238,100 @@ def test_url_job_rejects_unknown_host(config: Settings) -> None:
 def test_url_job_accepts_direct_media_on_unknown_host(config: Settings) -> None:
     validated_url = validate_media_url("https://example.com/video.mp4", config)
     assert validated_url.direct_media is True
+
+
+@pytest.mark.asyncio
+async def test_resolver_rejects_requests_when_capacity_is_exhausted() -> None:
+    acquired = 0
+    try:
+        for _ in range(_RESOLVER_MAX_CONCURRENT):
+            assert _RESOLVER_SLOTS.acquire(blocking=False)
+            acquired += 1
+        with pytest.raises(ResolverCapacityError, match="ocupada") as exc_info:
+            await resolve_public_url_async("https://example.com/video.mp4", Settings())
+        response = http_error_for_url(exc_info.value)
+        assert response.status_code == 503
+        assert response.headers == {"Retry-After": "1"}
+    finally:
+        for _ in range(acquired):
+            _RESOLVER_SLOTS.release()
+
+
+@pytest.mark.asyncio
+async def test_async_resolver_returns_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.url_validation._RESOLVER_SCRIPT",
+        'print(\'["93.184.216.34", "2606:4700::1"]\')',
+    )
+
+    resolved = await resolve_public_url_async("https://example.com/video.mp4", Settings())
+
+    assert resolved.addresses == ("93.184.216.34", "2606:4700::1")
+
+
+@pytest.mark.asyncio
+async def test_resolver_timeout_releases_capacity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("app.url_validation._RESOLVER_SCRIPT", "import time\ntime.sleep(1)")
+    monkeypatch.setattr("app.url_validation._RESOLVER_TIMEOUT_SECONDS", 0.01)
+
+    available_before = _RESOLVER_SLOTS._value
+    with pytest.raises(UrlValidationError, match="tempo limite"):
+        await resolve_public_url_async("https://example.com/video.mp4", Settings())
+
+    for _ in range(100):
+        if _RESOLVER_SLOTS._value == available_before:
+            break
+        await asyncio.sleep(0.01)
+    assert _RESOLVER_SLOTS._value == available_before
+
+
+@pytest.mark.asyncio
+async def test_resolver_cancellation_during_creation_kills_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    killed = asyncio.Event()
+
+    class FakeProcess:
+        returncode: int | None = None
+
+        def kill(self) -> None:
+            self.returncode = -9
+            killed.set()
+
+        async def wait(self) -> int:
+            return -9
+
+    process = FakeProcess()
+    available_before = _RESOLVER_SLOTS._value
+
+    async def fake_create(*args: object, **kwargs: object) -> FakeProcess:
+        started.set()
+        await release.wait()
+        return process
+
+    monkeypatch.setattr("app.url_validation.asyncio.create_subprocess_exec", fake_create)
+    task = asyncio.create_task(
+        resolve_public_url_async("https://example.com/video.mp4", Settings())
+    )
+    try:
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=0.5)
+
+        assert _RESOLVER_SLOTS._value == available_before - 1
+
+        release.set()
+        await asyncio.wait_for(killed.wait(), timeout=0.5)
+        for _ in range(100):
+            if _RESOLVER_SLOTS._value == available_before:
+                break
+            await asyncio.sleep(0.01)
+        assert _RESOLVER_SLOTS._value == available_before
+    finally:
+        release.set()
 
 
 def test_sanitize_filename() -> None:

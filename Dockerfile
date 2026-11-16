@@ -6,7 +6,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TMPDIR=/app/data/tmp
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y ffmpeg ca-certificates \
+    && apt-get install --no-install-recommends -y ffmpeg ca-certificates curl gnupg \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
+    > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install --no-install-recommends -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

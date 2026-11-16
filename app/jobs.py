@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import signal
+import threading
 import time
 from collections.abc import AsyncIterator
 from dataclasses import asdict, dataclass, field
@@ -37,6 +38,7 @@ from .media import (
 )
 from .url_validation import (
     ResolvedUrl,
+    UrlValidationError,
     ValidatedUrl,
     is_private_address,
     pinned_connection,
@@ -61,6 +63,8 @@ ACTIVE_JOB_STATUSES = frozenset({JobStatus.QUEUED, JobStatus.DOWNLOADING, JobSta
 MAX_CAPTURED_LINES = 200
 MAX_CAPTURED_LINE_LENGTH = 4096
 MAX_CAPTURED_BYTES = 1024 * 1024
+MAX_DOWNLOAD_STORAGE_FACTOR = 3
+YTDLP_PROGRESS_PREFIX = "__MEDIA_CONVERTER_PROGRESS__|"
 
 
 def _is_media_file_inside(path: Path, directory: Path) -> bool:
@@ -72,8 +76,56 @@ def _is_media_file_inside(path: Path, directory: Path) -> bool:
     return resolved_path.is_file()
 
 
+def _directory_size(directory: Path) -> int:
+    total = 0
+    for path in directory.rglob("*"):
+        try:
+            if path.is_file():
+                total += path.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _largest_file_size(directory: Path) -> int:
+    largest = 0
+    for path in directory.rglob("*"):
+        try:
+            if path.is_file():
+                largest = max(largest, path.stat().st_size)
+        except OSError:
+            continue
+    return largest
+
+
+def _parse_ytdlp_progress(line: str) -> tuple[str, int, int | None] | None:
+    if not line.startswith(YTDLP_PROGRESS_PREFIX):
+        return None
+    parts = line[len(YTDLP_PROGRESS_PREFIX) :].split("|")
+    if len(parts) not in {2, 3} or not parts[0]:
+        return None
+    format_id = parts[0]
+    try:
+        downloaded_bytes = int(parts[1])
+    except ValueError:
+        return None
+    if downloaded_bytes < 0:
+        return None
+    total_bytes: int | None = None
+    if len(parts) == 3:
+        try:
+            total_bytes = int(parts[2])
+        except ValueError:
+            total_bytes = None
+        if total_bytes is not None and total_bytes < 0:
+            total_bytes = None
+    return format_id, downloaded_bytes, total_bytes
+
+
 def _public_error_message(exc: Exception) -> str:
     message = str(exc).strip()
+    if isinstance(exc, UrlValidationError) and message:
+        return message
     if (
         isinstance(exc, RuntimeError)
         and message
@@ -120,6 +172,40 @@ class MediaInfo:
     format_names: tuple[str, ...]
     video_codec: str = ""
     audio_codec: str = ""
+    video_stream_index: int | None = None
+    audio_stream_index: int | None = None
+
+
+@dataclass
+class _DownloadBudget:
+    limit_bytes: int
+    downloaded_by_format: dict[str, int] = field(default_factory=dict)
+    total_by_format: dict[str, int] = field(default_factory=dict)
+    exceeded: bool = False
+
+    def update(
+        self,
+        format_id: str,
+        downloaded_bytes: int,
+        total_bytes: int | None = None,
+    ) -> bool:
+        previous = self.downloaded_by_format.get(format_id, 0)
+        self.downloaded_by_format[format_id] = max(previous, downloaded_bytes)
+        if total_bytes is not None:
+            known_total = self.total_by_format.get(format_id, 0)
+            self.total_by_format[format_id] = max(known_total, total_bytes)
+        was_exceeded = self.exceeded
+        self.exceeded = sum(self.downloaded_by_format.values()) > self.limit_bytes
+        return self.exceeded and not was_exceeded
+
+    @property
+    def downloaded_bytes(self) -> int:
+        return sum(self.downloaded_by_format.values())
+
+    @property
+    def total_bytes(self) -> int | None:
+        total = sum(self.total_by_format.values())
+        return total or None
 
 
 class JobStore:
@@ -128,7 +214,8 @@ class JobStore:
         self.jobs: dict[str, Job] = {}
         self.tasks: dict[str, asyncio.Task[None]] = {}
         self.processes: dict[str, asyncio.subprocess.Process] = {}
-        self.active_downloads: set[str] = set()
+        self.active_downloads: dict[str, int] = {}
+        self._download_lock = threading.Lock()
         self.semaphore = asyncio.Semaphore(config.max_concurrent_jobs)
 
     def can_accept_job(self) -> bool:
@@ -161,10 +248,20 @@ class JobStore:
         return self.jobs.get(job_id)
 
     def begin_download(self, job_id: str) -> None:
-        self.active_downloads.add(job_id)
+        with self._download_lock:
+            self.active_downloads[job_id] = self.active_downloads.get(job_id, 0) + 1
 
     def end_download(self, job_id: str) -> None:
-        self.active_downloads.discard(job_id)
+        with self._download_lock:
+            active = self.active_downloads.get(job_id, 0)
+            if active <= 1:
+                self.active_downloads.pop(job_id, None)
+            else:
+                self.active_downloads[job_id] = active - 1
+
+    def has_active_download(self, job_id: str) -> bool:
+        with self._download_lock:
+            return self.active_downloads.get(job_id, 0) > 0
 
     def update(self, job_id: str, **changes: Any) -> None:
         job = self.jobs.get(job_id)
@@ -224,39 +321,36 @@ class JobStore:
             message="Convertendo vídeo" if media_info.has_video else "Convertendo áudio",
         )
         try:
-            returncode, stderr_tail = await self._run_ffmpeg(
-                job,
-                source_path,
-                temporary_path,
-                media_info.duration_seconds,
-                progress_base,
-                media_info,
-            )
-        except TimeoutError as exc:
-            with contextlib.suppress(OSError):
-                temporary_path.unlink(missing_ok=True)
-            raise RuntimeError("A conversão excedeu o tempo limite.") from exc
+            try:
+                returncode, stderr_tail = await self._run_ffmpeg(
+                    job,
+                    source_path,
+                    temporary_path,
+                    media_info.duration_seconds,
+                    progress_base,
+                    media_info,
+                )
+            except TimeoutError as exc:
+                raise RuntimeError("A conversão excedeu o tempo limite.") from exc
+
+            if returncode != 0:
+                message = stderr_tail.replace(str(source_path), "origem").replace(
+                    str(temporary_path), "saída"
+                )
+                raise RuntimeError(message[-1200:] or "O FFmpeg não conseguiu converter o arquivo.")
+
+            output_size = safe_file_size(temporary_path)
+            if output_size == 0:
+                raise RuntimeError("A conversão terminou sem gerar um arquivo válido.")
+            if output_size > self.config.max_upload_bytes:
+                raise RuntimeError("O arquivo convertido excede o limite permitido.")
+
+            temporary_path.replace(output_path)
         except asyncio.CancelledError:
-            with contextlib.suppress(OSError):
-                temporary_path.unlink(missing_ok=True)
             raise
-
-        if returncode != 0:
-            message = stderr_tail.replace(str(source_path), "origem").replace(
-                str(temporary_path), "saída"
-            )
+        finally:
             with contextlib.suppress(OSError):
                 temporary_path.unlink(missing_ok=True)
-            raise RuntimeError(message[-1200:] or "O FFmpeg não conseguiu converter o arquivo.")
-
-        if not temporary_path.exists() or safe_file_size(temporary_path) == 0:
-            raise RuntimeError("A conversão terminou sem gerar um arquivo válido.")
-        if safe_file_size(temporary_path) >= self.config.max_upload_bytes:
-            with contextlib.suppress(OSError):
-                temporary_path.unlink(missing_ok=True)
-            raise RuntimeError("O arquivo convertido excede o limite permitido.")
-
-        temporary_path.replace(output_path)
         input_dir = (self.config.data_dir / job.id / "input").resolve()
         if source_path.parent.resolve() == input_dir:
             shutil.rmtree(input_dir, ignore_errors=True)
@@ -305,6 +399,9 @@ class JobStore:
         except asyncio.CancelledError:
             await self._terminate(job.id, process)
             raise
+        except Exception:
+            await self._terminate(job.id, process)
+            raise
         finally:
             self.processes.pop(job.id, None)
 
@@ -351,7 +448,7 @@ class JobStore:
             "-format_whitelist",
             input_format_whitelist(),
             "-show_entries",
-            "format=duration,format_name:stream=codec_type,codec_name,width,height:stream_disposition=attached_pic",
+            "format=duration,format_name:stream=index,codec_type,codec_name,width,height:stream_disposition=attached_pic",
             "-of",
             "json",
             str(source_path),
@@ -408,6 +505,16 @@ class JobStore:
                 raise RuntimeError("A resolução da mídia excede o limite permitido.")
 
         audio_streams = [stream for stream in streams if stream.get("codec_type") == "audio"]
+        video_stream_index = (
+            video_streams[0].get("index")
+            if video_streams and isinstance(video_streams[0].get("index"), int)
+            else None
+        )
+        audio_stream_index = (
+            audio_streams[0].get("index")
+            if audio_streams and isinstance(audio_streams[0].get("index"), int)
+            else None
+        )
         return MediaInfo(
             duration_seconds=duration,
             has_video=bool(video_streams),
@@ -415,6 +522,8 @@ class JobStore:
             format_names=format_names,
             video_codec=str(video_streams[0].get("codec_name") or "") if video_streams else "",
             audio_codec=str(audio_streams[0].get("codec_name") or "") if audio_streams else "",
+            video_stream_index=video_stream_index,
+            audio_stream_index=audio_stream_index,
         )
 
     def _ffmpeg_args(
@@ -446,10 +555,29 @@ class JobStore:
             "-format_whitelist",
             input_format_whitelist(),
             "-threads",
-            "0",
+            str(self.config.ffmpeg_threads),
             "-i",
             str(source_path),
         ]
+        if job.output_format in AUDIO_FORMATS:
+            audio_selector = (
+                f"0:{media_info.audio_stream_index}"
+                if media_info is not None and media_info.audio_stream_index is not None
+                else "0:a:0"
+            )
+            args.extend(["-map", audio_selector])
+        else:
+            video_selector = (
+                f"0:{media_info.video_stream_index}"
+                if media_info is not None and media_info.video_stream_index is not None
+                else "0:v:0"
+            )
+            audio_selector = (
+                f"0:{media_info.audio_stream_index}"
+                if media_info is not None and media_info.audio_stream_index is not None
+                else "0:a:0?"
+            )
+            args.extend(["-map", video_selector, "-map", audio_selector])
         if job.output_format not in AUDIO_FORMATS and job.quality != Quality.ORIGINAL:
             height = {"high": 1080, "medium": 720, "low": 480}[job.quality]
             args.extend(["-vf", f"scale=-2:'min({height},ih)'"])
@@ -460,9 +588,9 @@ class JobStore:
                 args.extend(["-c", "copy"])
         else:
             args.extend(codec_options(job.output_format))
-        args.extend(["-threads", "0", "-max_muxing_queue_size", "1024"])
+        args.extend(["-threads", str(self.config.ffmpeg_threads), "-max_muxing_queue_size", "1024"])
         args.extend(["-t", str(self.config.max_duration_seconds)])
-        args.extend(["-fs", str(self.config.max_upload_bytes)])
+        args.extend(["-fs", str(self.config.max_upload_bytes + 1)])
         if job.output_format == OutputFormat.MP4:
             args.extend(["-movflags", "+faststart"])
         args.extend([str(output_path)])
@@ -479,6 +607,8 @@ class JobStore:
         process = self.processes.get(job_id)
         if process:
             await self._terminate(job_id, process)
+        if task and not task.done():
+            await asyncio.gather(task, return_exceptions=True)
         return True
 
     async def _terminate(self, job_id: str, process: asyncio.subprocess.Process) -> None:
@@ -522,7 +652,12 @@ class JobStore:
         job = self.jobs.get(job_id)
         if not job:
             return False
-        if job.status in ACTIVE_JOB_STATUSES or job_id in self.active_downloads:
+        task = self.tasks.get(job_id)
+        if (
+            job.status in ACTIVE_JOB_STATUSES
+            or self.has_active_download(job_id)
+            or (task is not None and not task.done())
+        ):
             return False
         if not self._delete_job_dir(job_id):
             return False
@@ -533,9 +668,11 @@ class JobStore:
     def cleanup_expired(self) -> None:
         cutoff = time.time() - self.config.cleanup_after_seconds
         for job_id, job in list(self.jobs.items()):
+            task = self.tasks.get(job_id)
             if (
                 job.status in ACTIVE_JOB_STATUSES
-                or job_id in self.active_downloads
+                or self.has_active_download(job_id)
+                or (task is not None and not task.done())
                 or job.updated_at.timestamp() >= cutoff
             ):
                 continue
@@ -581,10 +718,24 @@ def _ytdlp_format_selector(output_format: OutputFormat | None) -> str:
     if output_format == OutputFormat.MP4:
         return "bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b"
     if output_format == OutputFormat.WEBM:
-        return "bv*[ext=webm][vcodec^=vp9]+ba[acodec^=opus]/bv*[ext=webm]/bv*+ba/b"
+        return "bv*[ext=webm]+ba/bv*+ba/b"
     if output_format == OutputFormat.MKV:
         return "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/bv*+ba/b"
     return "bv*+ba/b"
+
+
+def _ytdlp_error_message(stderr: str) -> str:
+    normalized = stderr.casefold()
+    if "sign in to confirm your age" in normalized or "age-restricted" in normalized:
+        return (
+            "Este vídeo exige confirmação de idade. Use cookies de uma conta do YouTube "
+            "com a confirmação de idade concluída."
+        )
+    if "sign in to confirm you're not a bot" in normalized:
+        return "O YouTube exigiu autenticação para continuar o download."
+    if "unsupported url" in normalized:
+        return "O yt-dlp não reconhece este link."
+    return "Não foi possível baixar o link."
 
 
 class UrlDownloader:
@@ -612,7 +763,11 @@ class UrlDownloader:
             "--newline",
             "--no-warnings",
             "--no-cache-dir",
+            "--no-colors",
             "--progress",
+            "--progress-template",
+            f"download:{YTDLP_PROGRESS_PREFIX}%(info.format_id)s|%(progress.downloaded_bytes)s"
+            "|%(progress.total_bytes)s",
             "--concurrent-fragments",
             "4",
             "--format",
@@ -628,6 +783,12 @@ class UrlDownloader:
             "--print",
             "after_move:filepath",
         ]
+        if self.config.ytdlp_cookies_file is not None:
+            args.extend(["--cookies", str(self.config.ytdlp_cookies_file)])
+        if self.config.ytdlp_cookies_from_browser:
+            args.extend(["--cookies-from-browser", self.config.ytdlp_cookies_from_browser])
+        for runtime in self.config.ytdlp_js_runtimes:
+            args.extend(["--js-runtimes", runtime])
         if self.config.ytdlp_proxy:
             args.extend(["--proxy", self.config.ytdlp_proxy])
         args.append(url)
@@ -660,29 +821,44 @@ class UrlDownloader:
             progress=1,
             message="Baixando conteúdo",
         )
+        oversized = asyncio.Event()
+        budget = _DownloadBudget(
+            limit_bytes=self.config.max_upload_bytes + (self.config.max_upload_bytes // 100)
+        )
+        monitor_task = asyncio.create_task(
+            self._watch_output_size(job, output_dir, process, store, oversized)
+        )
         try:
-            stdout_lines, stderr = await asyncio.wait_for(
-                asyncio.gather(
-                    self._read_ytdlp_stdout(job, process, store),
+            async with asyncio.timeout(self.config.download_total_timeout_seconds):
+                stdout_lines, stderr = await asyncio.gather(
+                    self._read_ytdlp_stdout(job, process, store, budget),
                     self._read_ytdlp_stderr(job, process, store),
-                ),
-                timeout=self.config.download_total_timeout_seconds,
-            )
-            await process.wait()
+                )
+                await process.wait()
         except TimeoutError as exc:
             await store._terminate(job.id, process)
             raise RuntimeError("O download excedeu o tempo limite.") from exc
         except asyncio.CancelledError:
             await store._terminate(job.id, process)
             raise
+        except Exception:
+            await store._terminate(job.id, process)
+            raise
         finally:
+            monitor_task.cancel()
+            await asyncio.gather(monitor_task, return_exceptions=True)
             store.processes.pop(job.id, None)
+
+        if (
+            budget.exceeded
+            or oversized.is_set()
+            or _largest_file_size(output_dir) > self.config.max_upload_bytes
+        ):
+            raise RuntimeError("O arquivo baixado excede o limite permitido.")
 
         if process.returncode != 0:
             message = stderr.decode("utf-8", errors="replace").strip()
-            if "Unsupported URL" in message:
-                raise RuntimeError("O yt-dlp não reconhece este link.")
-            raise RuntimeError("Não foi possível baixar o link.")
+            raise RuntimeError(_ytdlp_error_message(message))
 
         lines = [line.strip() for line in stdout_lines if line.strip()]
         candidates = [
@@ -712,11 +888,31 @@ class UrlDownloader:
             job.source_name = sanitize_filename(chosen.stem or "video")
         return chosen
 
+    async def _watch_output_size(
+        self,
+        job: Job,
+        output_dir: Path,
+        process: asyncio.subprocess.Process,
+        store: JobStore,
+        oversized: asyncio.Event,
+    ) -> None:
+        while process.returncode is None:
+            if (
+                _largest_file_size(output_dir) > self.config.max_upload_bytes
+                or _directory_size(output_dir)
+                > self.config.max_upload_bytes * MAX_DOWNLOAD_STORAGE_FACTOR
+            ):
+                oversized.set()
+                await store._terminate(job.id, process)
+                return
+            await asyncio.sleep(0.25)
+
     async def _read_ytdlp_stdout(
         self,
         job: Job,
         process: asyncio.subprocess.Process,
         store: JobStore,
+        budget: _DownloadBudget,
     ) -> list[str]:
         if process.stdout is None:
             return []
@@ -730,6 +926,11 @@ class UrlDownloader:
             lines.append(line[:MAX_CAPTURED_LINE_LENGTH])
             if len(lines) > MAX_CAPTURED_LINES:
                 lines.pop(0)
+            progress = _parse_ytdlp_progress(line)
+            if progress is not None:
+                if budget.update(*progress):
+                    await store._terminate(job.id, process)
+                self._update_download_totals(job, budget, store)
             self._update_ytdlp_progress(job, line, store)
         return lines
 
@@ -756,6 +957,22 @@ class UrlDownloader:
             text = chunk.decode("utf-8", errors="replace")
             self._update_ytdlp_progress(job, text, store)
         return b"".join(chunks)
+
+    def _update_download_totals(
+        self,
+        job: Job,
+        budget: _DownloadBudget,
+        store: JobStore,
+    ) -> None:
+        completed = budget.downloaded_bytes
+        total = budget.total_bytes
+        changes: dict[str, Any] = {
+            "download_completed": completed,
+            "download_total": total,
+        }
+        if total:
+            changes["progress"] = min(45, max(1, int(completed / total * 45)))
+        store.update(job.id, **changes)
 
     def _update_ytdlp_progress(self, job: Job, text: str, store: JobStore) -> None:
         for match in re.finditer(r"(\d{1,3}(?:\.\d+)?)%", text):
@@ -869,6 +1086,8 @@ class UrlDownloader:
                         total = max(0, int(content_length)) or None
                     except ValueError:
                         total = None
+                    if total is not None and total > self.config.max_upload_bytes:
+                        raise RuntimeError("O arquivo direto excede o limite de download.")
                     store.update(
                         job.id,
                         status=JobStatus.DOWNLOADING,

@@ -38,6 +38,9 @@ class Settings:
     ffprobe_binary: str = "ffprobe"
     ytdlp_binary: str = "yt-dlp"
     ytdlp_proxy: str = ""
+    ytdlp_cookies_file: Path | None = None
+    ytdlp_cookies_from_browser: str = ""
+    ytdlp_js_runtimes: tuple[str, ...] = ()
     allow_private_hosts: bool = False
     download_timeout_seconds: int = 120
     download_total_timeout_seconds: int = 60 * 60 * 12
@@ -45,6 +48,7 @@ class Settings:
     probe_timeout_seconds: int = 120
     cleanup_after_seconds: int = 60 * 60 * 24
     max_concurrent_jobs: int = 2
+    ffmpeg_threads: int = 1
     max_pending_jobs: int = 10
     max_retained_jobs: int = 100
     max_duration_seconds: int = 60 * 60 * 4
@@ -59,6 +63,7 @@ class Settings:
             "probe_timeout_seconds": self.probe_timeout_seconds,
             "cleanup_after_seconds": self.cleanup_after_seconds,
             "max_concurrent_jobs": self.max_concurrent_jobs,
+            "ffmpeg_threads": self.ffmpeg_threads,
             "max_pending_jobs": self.max_pending_jobs,
             "max_retained_jobs": self.max_retained_jobs,
             "max_duration_seconds": self.max_duration_seconds,
@@ -69,6 +74,18 @@ class Settings:
                 raise ValueError(f"{name} deve ser maior que zero.")
         if not self.trusted_hosts:
             raise ValueError("É necessário definir pelo menos um host confiável.")
+        if self.ytdlp_cookies_file is not None and self.ytdlp_cookies_from_browser:
+            raise ValueError("Configure cookies do yt-dlp por arquivo ou por navegador, não ambos.")
+        if self.ytdlp_cookies_file is not None:
+            cookies_path = self.ytdlp_cookies_file
+            if not cookies_path.is_file():
+                raise ValueError(f"Arquivo de cookies do yt-dlp não encontrado: {cookies_path}")
+            if not os.access(cookies_path, os.R_OK):
+                raise ValueError("O arquivo de cookies do yt-dlp não pode ser lido.")
+            if cookies_path.stat().st_mode & 0o077:
+                raise ValueError(
+                    "O arquivo de cookies do yt-dlp deve ser acessível somente pelo proprietário."
+                )
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -84,6 +101,19 @@ class Settings:
             for host in os.getenv("MEDIA_CONVERTER_TRUSTED_HOSTS", "").split(",")
             if host.strip()
         )
+        js_runtimes = tuple(
+            value.strip()
+            for value in os.getenv("MEDIA_CONVERTER_YTDLP_JS_RUNTIMES", "").split(",")
+            if value.strip()
+        )
+        cookies_file_value = os.getenv("MEDIA_CONVERTER_YTDLP_COOKIES_FILE", "").strip()
+        if cookies_file_value:
+            cookies_path = Path(cookies_file_value).expanduser()
+            if not cookies_path.is_absolute():
+                cookies_path = BASE_DIR / cookies_path
+            cookies_file: Path | None = cookies_path.resolve()
+        else:
+            cookies_file = None
         return cls(
             data_dir=data_dir,
             max_upload_bytes=int(
@@ -95,6 +125,12 @@ class Settings:
             ffprobe_binary=os.getenv("FFPROBE_BINARY", defaults.ffprobe_binary),
             ytdlp_binary=os.getenv("YTDLP_BINARY", defaults.ytdlp_binary),
             ytdlp_proxy=os.getenv("MEDIA_CONVERTER_YTDLP_PROXY", defaults.ytdlp_proxy).strip(),
+            ytdlp_cookies_file=cookies_file,
+            ytdlp_cookies_from_browser=os.getenv(
+                "MEDIA_CONVERTER_YTDLP_COOKIES_FROM_BROWSER",
+                defaults.ytdlp_cookies_from_browser,
+            ).strip(),
+            ytdlp_js_runtimes=js_runtimes,
             allow_private_hosts=os.getenv("MEDIA_CONVERTER_ALLOW_PRIVATE_HOSTS", "").strip().lower()
             in {"1", "true", "yes", "on"},
             download_timeout_seconds=int(
@@ -129,6 +165,9 @@ class Settings:
             ),
             max_concurrent_jobs=int(
                 os.getenv("MEDIA_CONVERTER_MAX_CONCURRENT_JOBS", str(defaults.max_concurrent_jobs))
+            ),
+            ffmpeg_threads=int(
+                os.getenv("MEDIA_CONVERTER_FFMPEG_THREADS", str(defaults.ffmpeg_threads))
             ),
             max_pending_jobs=int(
                 os.getenv("MEDIA_CONVERTER_MAX_PENDING_JOBS", str(defaults.max_pending_jobs))
