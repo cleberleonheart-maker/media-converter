@@ -19,6 +19,7 @@ const state = {
   submitting: false,
   cancellingJobs: new Set(),
   removingJobs: new Set(),
+  auth: { checked: false, authenticated: false, config: null },
 };
 
 const elements = {
@@ -38,6 +39,11 @@ const elements = {
   emptyState: document.querySelector("#empty-state"),
   jobCount: document.querySelector("#job-count"),
   jobTemplate: document.querySelector("#job-template"),
+  loginScreen: document.querySelector("#login-screen"),
+  loginCopy: document.querySelector("#login-copy"),
+  loginError: document.querySelector("#login-error"),
+  googleButton: document.querySelector("#google-button"),
+  logoutButton: document.querySelector("#logout-button"),
 };
 
 const statusLabels = {
@@ -123,6 +129,112 @@ function normalizeApiDetail(detail) {
   return detail === null || detail === undefined ? "" : String(detail);
 }
 
+function showLoginScreen(config) {
+  state.auth.authenticated = false;
+  elements.loginScreen.hidden = false;
+  elements.logoutButton.hidden = true;
+  if (config && config.google_enabled) {
+    elements.loginCopy.textContent = "Use sua conta Google para continuar.";
+    renderGoogleButton(config.google_client_id);
+  } else if (config && config.basic_enabled) {
+    elements.loginCopy.textContent = "Este servidor exige usuário e senha. Recarregue a página para autenticar.";
+  } else {
+    elements.loginCopy.textContent = "Nenhum método de login configurado neste servidor.";
+  }
+}
+
+function showApp(authenticated) {
+  state.auth.authenticated = authenticated;
+  elements.loginScreen.hidden = true;
+  elements.logoutButton.hidden = !authenticated;
+}
+
+function showLoginError(message) {
+  elements.loginError.textContent = message;
+  elements.loginError.hidden = false;
+}
+
+function loadGoogleIdentityScript() {
+  if (window.google && window.google.accounts && window.google.accounts.id) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Não foi possível carregar o login do Google."));
+    document.head.appendChild(script);
+  });
+}
+
+async function renderGoogleButton(clientId) {
+  if (!clientId || elements.googleButton.dataset.rendered === clientId) return;
+  try {
+    await loadGoogleIdentityScript();
+    if (!window.google || !window.google.accounts || !window.google.accounts.id) return;
+    window.google.accounts.id.initialize({
+      client_id: clientId,
+      callback: handleGoogleCredential,
+    });
+    elements.googleButton.dataset.rendered = clientId;
+    window.google.accounts.id.renderButton(elements.googleButton, {
+      type: "standard",
+      theme: "outline",
+      size: "large",
+      text: "continue_with",
+      shape: "pill",
+      width: 280,
+    });
+  } catch (error) {
+    showLoginError(error.message);
+  }
+}
+
+async function handleGoogleCredential(response) {
+  if (!response || !response.credential) return;
+  elements.loginError.hidden = true;
+  try {
+    await request("/api/auth/google", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ credential: response.credential }),
+    });
+    showApp(true);
+    await loadInitialJobs();
+  } catch (error) {
+    showLoginError(error.message);
+  }
+}
+
+async function checkAuth() {
+  try {
+    const config = await request("/api/auth/config");
+    state.auth.config = config;
+    state.auth.checked = true;
+    if (config.authenticated) {
+      showApp(true);
+      return true;
+    }
+    showLoginScreen(config);
+    return false;
+  } catch {
+    state.auth.checked = true;
+    showApp(false);
+    return false;
+  }
+}
+
+async function logout() {
+  try {
+    await request("/api/auth/logout", { method: "POST" });
+  } catch {
+    // ignora falhas no logout; a sessao local sera limpa pelo navegador
+  }
+  window.location.reload();
+}
+
 async function request(url, options = {}) {
   let response;
   try {
@@ -151,6 +263,9 @@ async function request(url, options = {}) {
       || "Não foi possível concluir a solicitação.";
     const requestError = new Error(message);
     requestError.status = response.status;
+    if (response.status === 401) {
+      showLoginScreen(state.auth.config);
+    }
     throw requestError;
   }
 
@@ -479,6 +594,7 @@ elements.dropZone.addEventListener("drop", (event) => {
 
 elements.format.addEventListener("change", syncQualityAvailability);
 elements.convertButton.addEventListener("click", submitJob);
+elements.logoutButton.addEventListener("click", logout);
 elements.urlInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
@@ -498,4 +614,6 @@ elements.jobsList.addEventListener("click", (event) => {
 
 setSource("upload");
 syncQualityAvailability();
-loadInitialJobs();
+checkAuth().then((authenticated) => {
+  if (authenticated) loadInitialJobs();
+});

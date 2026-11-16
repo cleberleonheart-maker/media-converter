@@ -43,6 +43,10 @@ class Settings:
     ytdlp_js_runtimes: tuple[str, ...] = ()
     auth_user: str = ""
     auth_password: str = ""
+    google_client_id: str = ""
+    google_allowed_domains: tuple[str, ...] = ()
+    session_secret: str = ""
+    session_ttl_seconds: int = 24 * 60 * 60
     allow_private_hosts: bool = False
     download_timeout_seconds: int = 120
     download_total_timeout_seconds: int = 60 * 60 * 12
@@ -70,6 +74,7 @@ class Settings:
             "max_retained_jobs": self.max_retained_jobs,
             "max_duration_seconds": self.max_duration_seconds,
             "max_video_pixels": self.max_video_pixels,
+            "session_ttl_seconds": self.session_ttl_seconds,
         }
         for name, value in positive_values.items():
             if value <= 0:
@@ -78,6 +83,8 @@ class Settings:
             raise ValueError("É necessário definir pelo menos um host confiável.")
         if bool(self.auth_user) != bool(self.auth_password):
             raise ValueError("Defina usuário e senha de autenticação ou nenhum dos dois.")
+        if self.google_client_id and not self.session_secret:
+            raise ValueError("Defina MEDIA_CONVERTER_SESSION_SECRET para usar o login com Google.")
         if self.ytdlp_cookies_file is not None and self.ytdlp_cookies_from_browser:
             raise ValueError("Configure cookies do yt-dlp por arquivo ou por navegador, não ambos.")
         if self.ytdlp_cookies_file is not None:
@@ -137,6 +144,21 @@ class Settings:
             ytdlp_js_runtimes=js_runtimes,
             auth_user=os.getenv("MEDIA_CONVERTER_AUTH_USER", defaults.auth_user).strip(),
             auth_password=os.getenv("MEDIA_CONVERTER_AUTH_PASSWORD", defaults.auth_password),
+            google_client_id=os.getenv(
+                "MEDIA_CONVERTER_GOOGLE_CLIENT_ID", defaults.google_client_id
+            ).strip(),
+            google_allowed_domains=tuple(
+                value.strip().lower().lstrip("@")
+                for value in os.getenv("MEDIA_CONVERTER_GOOGLE_ALLOWED_DOMAINS", "").split(",")
+                if value.strip()
+            ),
+            session_secret=os.getenv("MEDIA_CONVERTER_SESSION_SECRET", defaults.session_secret),
+            session_ttl_seconds=int(
+                os.getenv(
+                    "MEDIA_CONVERTER_SESSION_TTL_SECONDS",
+                    str(defaults.session_ttl_seconds),
+                )
+            ),
             allow_private_hosts=os.getenv("MEDIA_CONVERTER_ALLOW_PRIVATE_HOSTS", "").strip().lower()
             in {"1", "true", "yes", "on"},
             download_timeout_seconds=int(

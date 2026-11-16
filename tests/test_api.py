@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.auth import create_session_token
 from app.config import Settings
 from app.main import build_app
 from app.media import OutputFormat, Quality, sanitize_filename
@@ -83,6 +84,68 @@ def test_auth_requires_user_and_password() -> None:
         pytest.raises(ValueError, match="usuário e senha"),
     ):
         Settings(data_dir=Path(directory), auth_user="admin")
+
+
+def test_auth_config_reports_google_disabled() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        config = Settings(data_dir=Path(directory), trusted_hosts=("testserver",))
+        app = build_app(config)
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/auth/config")
+
+        assert response.status_code == 200
+        assert response.json()["google_enabled"] is False
+
+
+def test_session_cookie_grants_access() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        config = Settings(
+            data_dir=Path(directory),
+            trusted_hosts=("testserver",),
+            google_client_id="client-id",
+            session_secret="segredo",
+        )
+        app = build_app(config)
+        with TestClient(app) as test_client:
+            unauthorized = test_client.get("/api/jobs")
+            assert unauthorized.status_code == 401
+
+            token = create_session_token("user@example.com", "segredo", 60)
+            authorized = test_client.get("/api/jobs", cookies={"mc_session": token})
+            assert authorized.status_code == 200
+
+            logout = test_client.post("/api/auth/logout")
+            assert logout.status_code == 200
+
+
+def test_google_login_creates_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_verify(credential: str, client_id: str, allowed_domains: tuple[str, ...]) -> str:
+        assert credential == "credencial"
+        assert client_id == "client-id"
+        return "user@example.com"
+
+    monkeypatch.setattr("app.main.verify_google_credential", fake_verify)
+
+    with tempfile.TemporaryDirectory() as directory:
+        config = Settings(
+            data_dir=Path(directory),
+            trusted_hosts=("testserver",),
+            google_client_id="client-id",
+            session_secret="segredo",
+        )
+        app = build_app(config)
+        with TestClient(app) as test_client:
+            response = test_client.post(
+                "/api/auth/google",
+                json={"credential": "credencial"},
+            )
+
+            assert response.status_code == 200
+            assert response.json()["email"] == "user@example.com"
+            assert "mc_session" in response.cookies
+
+            jobs = test_client.get("/api/jobs")
+            assert jobs.status_code == 200
 
 
 def test_rejects_oversized_content_length(client: TestClient) -> None:

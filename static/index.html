@@ -15,7 +15,18 @@
         <span>Media Converter</span>
       </a>
       <span class="status-pill"><span class="status-dot"></span>Processamento local</span>
+      <button class="logout-button" id="logout-button" type="button" hidden>Sair</button>
     </header>
+
+    <section class="login-screen" id="login-screen" hidden>
+      <div class="login-card">
+        <p class="eyebrow">Acesso restrito</p>
+        <h1>Entre para usar o conversor</h1>
+        <p class="login-copy" id="login-copy">Use sua conta Google para continuar.</p>
+        <div class="google-button" id="google-button"></div>
+        <p class="form-error" id="login-error" role="alert" hidden></p>
+      </div>
+    </section>
 
     <main class="container">
       <section class="hero">

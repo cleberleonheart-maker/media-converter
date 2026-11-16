@@ -67,6 +67,10 @@ Acesse `http://localhost:8000`. A documentação interativa da API fica em `http
 | `MEDIA_CONVERTER_YTDLP_JS_RUNTIMES` | vazio | Runtimes JavaScript usados pelo yt-dlp (ex.: `node:/usr/bin/node`, `deno`), separados por vírgula |
 | `MEDIA_CONVERTER_AUTH_USER` | vazio | Usuário da autenticação básica obrigatória para expor o serviço |
 | `MEDIA_CONVERTER_AUTH_PASSWORD` | vazio | Senha da autenticação básica |
+| `MEDIA_CONVERTER_GOOGLE_CLIENT_ID` | vazio | Client ID do OAuth 2.0 usado no login com Google |
+| `MEDIA_CONVERTER_GOOGLE_ALLOWED_DOMAINS` | vazio | Domínios de e-mail autorizados a usar o conversor, separados por vírgula |
+| `MEDIA_CONVERTER_SESSION_SECRET` | vazio | Chave usada para assinar a sessão do login com Google |
+| `MEDIA_CONVERTER_SESSION_TTL_SECONDS` | `86400` | Validade da sessão em segundos |
 
 Para permitir outra plataforma no yt-dlp, adicione o domínio à lista. Hosts públicos com extensão de mídia são aceitos como link direto; um host desconhecido sem extensão compatível é rejeitado.
 
@@ -115,6 +119,18 @@ sudo systemctl edit tailscaled
 ExecStart=
 ExecStart=/usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641 --tun=tailscale
 ```
+
+### Login com Google
+
+Crie um cliente OAuth 2.0 do tipo **aplicativo web** no [Google Cloud Console](https://console.cloud.google.com/apis/credentials) e adicione as origens autorizadas (por exemplo `https://media-converter.tail045fd4.ts.net` e `http://localhost:8000`). Depois configure:
+
+```bash
+MEDIA_CONVERTER_GOOGLE_CLIENT_ID=1234567890-abc.apps.googleusercontent.com
+MEDIA_CONVERTER_SESSION_SECRET=uma-chave-aleatoria-longa
+MEDIA_CONVERTER_GOOGLE_ALLOWED_DOMAINS=gmail.com
+```
+
+O frontend usa o Google Identity Services, envia o ID token ao backend, que valida a credencial, cria uma sessão assinada (cookie `HttpOnly`) e libera a API. `MEDIA_CONVERTER_GOOGLE_ALLOWED_DOMAINS` é opcional e restringe o acesso a determinados domínios de e-mail.
 
 ### Autenticação básica
 

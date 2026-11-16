@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import secrets
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, JSONResponse
@@ -17,6 +18,14 @@ from starlette.background import BackgroundTask
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from .auth import (
+    SESSION_COOKIE_NAME,
+    AuthError,
+    Session,
+    create_session_token,
+    verify_google_credential,
+    verify_session_token,
+)
 from .config import Settings, settings
 from .jobs import Job, JobCapacityError, JobService, JobStatus, JobStore
 from .media import FORMATS, OutputFormat, Quality, sanitize_filename
@@ -118,12 +127,23 @@ class RequestBodyLimitMiddleware:
         await self.app(scope, limited_receive, send)
 
 
-class BasicAuthMiddleware:
-    def __init__(self, app: ASGIApp, username: str, password: str) -> None:
+class AuthMiddleware:
+    def __init__(
+        self,
+        app: ASGIApp,
+        config: Settings,
+    ) -> None:
         self.app = app
-        self.username = username
-        self.password = password
-        self.expected = "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
+        self.config = config
+        self.basic_expected = ""
+        if config.auth_user and config.auth_password:
+            token = base64.b64encode(f"{config.auth_user}:{config.auth_password}".encode()).decode()
+            self.basic_expected = "Basic " + token
+
+    def _is_public_path(self, path: str) -> bool:
+        if not path.startswith("/api/"):
+            return True
+        return path in {"/api/health", "/api/auth/config", "/api/auth/google", "/api/auth/logout"}
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -131,7 +151,7 @@ class BasicAuthMiddleware:
             return
 
         path = scope.get("path", "")
-        if path == "/api/health":
+        if self._is_public_path(path):
             await self.app(scope, receive, send)
             return
 
@@ -139,16 +159,50 @@ class BasicAuthMiddleware:
             key.decode("latin-1").lower(): value.decode("latin-1")
             for key, value in scope.get("headers", [])
         }
-        provided = headers.get("authorization", "")
-        if not secrets.compare_digest(provided, self.expected):
-            await JSONResponse(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                content={"detail": "Autenticação necessária."},
-                headers={"WWW-Authenticate": 'Basic realm="Media Converter"'},
-            )(scope, receive, send)
+
+        session = (
+            verify_session_token(
+                _cookie_value(headers.get("cookie", ""), SESSION_COOKIE_NAME),
+                self.config.session_secret,
+            )
+            if self.config.session_secret
+            else None
+        )
+        if session is not None:
+            scope.setdefault("state", {})
+            scope["state"]["session_email"] = session.email
+            await self.app(scope, receive, send)
             return
 
-        await self.app(scope, receive, send)
+        if self.basic_expected:
+            provided = headers.get("authorization", "")
+            if secrets.compare_digest(provided, self.basic_expected):
+                await self.app(scope, receive, send)
+                return
+
+        response_headers = {}
+        if self.basic_expected:
+            response_headers["WWW-Authenticate"] = 'Basic realm="Media Converter"'
+        await JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"detail": "Autenticação necessária."},
+            headers=response_headers,
+        )(scope, receive, send)
+
+
+def _cookie_value(cookie_header: str, name: str) -> str:
+    for part in cookie_header.split(";"):
+        key, separator, value = part.strip().partition("=")
+        if separator and key == name:
+            return value
+    return ""
+
+
+def _session_from_request(request: Request, config: Settings) -> Session | None:
+    if not config.session_secret:
+        return None
+    cookie = request.cookies.get(SESSION_COOKIE_NAME, "")
+    return verify_session_token(cookie, config.session_secret)
 
 
 class UrlJobRequest(BaseModel):
@@ -209,17 +263,71 @@ def build_app(config: Settings = settings) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/api/auth/config")
+    async def auth_config(request: Request) -> dict[str, Any]:
+        session = _session_from_request(request, config)
+        return {
+            "authenticated": session is not None or bool(config.auth_user),
+            "email": session.email if session else None,
+            "google_client_id": config.google_client_id,
+            "google_enabled": bool(config.google_client_id and config.session_secret),
+            "basic_enabled": bool(config.auth_user and config.auth_password),
+        }
+
+    @app.post("/api/auth/google")
+    async def auth_google(request: Request) -> JSONResponse:
+        if not config.google_client_id or not config.session_secret:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="O login com Google não está configurado.",
+            )
+        try:
+            payload = await request.json()
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Requisição inválida.",
+            ) from exc
+        credential = payload.get("credential") if isinstance(payload, dict) else None
+        if not isinstance(credential, str) or not credential:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Credencial do Google ausente.",
+            )
+        try:
+            email = await verify_google_credential(
+                credential,
+                config.google_client_id,
+                config.google_allowed_domains,
+            )
+        except AuthError as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+        token = create_session_token(email, config.session_secret, config.session_ttl_seconds)
+        response = JSONResponse({"email": email, "authenticated": True})
+        response.set_cookie(
+            SESSION_COOKIE_NAME,
+            token,
+            max_age=config.session_ttl_seconds,
+            httponly=True,
+            samesite="lax",
+            secure=request.url.scheme == "https",
+            path="/",
+        )
+        return response
+
+    @app.post("/api/auth/logout")
+    async def auth_logout() -> JSONResponse:
+        response = JSONResponse({"authenticated": False})
+        response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+        return response
+
     app.add_middleware(
         RequestBodyLimitMiddleware,
         max_body_bytes=config.max_upload_bytes + 1024 * 1024,
         can_accept_job=store.can_accept_job,
     )
-    if config.auth_user and config.auth_password:
-        app.add_middleware(
-            BasicAuthMiddleware,
-            username=config.auth_user,
-            password=config.auth_password,
-        )
+    if config.auth_user or config.google_client_id:
+        app.add_middleware(AuthMiddleware, config=config)
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(config.trusted_hosts))
 
     @app.exception_handler(RequestBodyTooLarge)
