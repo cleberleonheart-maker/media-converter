@@ -98,7 +98,11 @@ async def verify_google_credential(
         raise AuthError("Conta do Google sem e-mail.")
     if allowed_domains:
         domain = email.rsplit("@", 1)[-1]
-        if domain not in allowed_domains:
+        permitted = any(
+            entry.lower() == email if "@" in entry else entry.lower() == domain
+            for entry in allowed_domains
+        )
+        if not permitted:
             raise AuthError("Esta conta não tem acesso ao conversor.")
     return email
 

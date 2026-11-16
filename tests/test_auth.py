@@ -128,6 +128,29 @@ async def test_verify_google_credential_accepts_allowed_domain() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verify_google_credential_accepts_allowed_email() -> None:
+    email = await verify_google_credential(
+        "token",
+        "client-id",
+        allowed_domains=("User@example.com",),
+        transport=_transport(_tokeninfo_payload()),
+    )
+
+    assert email == "user@example.com"
+
+
+@pytest.mark.asyncio
+async def test_verify_google_credential_rejects_email_not_allowed() -> None:
+    with pytest.raises(AuthError, match="não tem acesso"):
+        await verify_google_credential(
+            "token",
+            "client-id",
+            allowed_domains=("outro@example.com",),
+            transport=_transport(_tokeninfo_payload()),
+        )
+
+
+@pytest.mark.asyncio
 async def test_verify_google_credential_rejects_invalid_response() -> None:
     with pytest.raises(AuthError, match="validar a credencial"):
         await verify_google_credential(

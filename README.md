@@ -68,7 +68,7 @@ Acesse `http://localhost:8000`. A documentação interativa da API fica em `http
 | `MEDIA_CONVERTER_AUTH_USER` | vazio | Usuário da autenticação básica obrigatória para expor o serviço |
 | `MEDIA_CONVERTER_AUTH_PASSWORD` | vazio | Senha da autenticação básica |
 | `MEDIA_CONVERTER_GOOGLE_CLIENT_ID` | vazio | Client ID do OAuth 2.0 usado no login com Google |
-| `MEDIA_CONVERTER_GOOGLE_ALLOWED_DOMAINS` | vazio | Domínios de e-mail autorizados a usar o conversor, separados por vírgula |
+| `MEDIA_CONVERTER_GOOGLE_ALLOWED_DOMAINS` | vazio | Domínios (`gmail.com`) ou e-mails exatos (`cleberleonheart@gmail.com`) autorizados a usar o conversor, separados por vírgula |
 | `MEDIA_CONVERTER_SESSION_SECRET` | vazio | Chave usada para assinar a sessão do login com Google |
 | `MEDIA_CONVERTER_SESSION_TTL_SECONDS` | `86400` | Validade da sessão em segundos |
 
@@ -130,7 +130,7 @@ MEDIA_CONVERTER_SESSION_SECRET=uma-chave-aleatoria-longa
 MEDIA_CONVERTER_GOOGLE_ALLOWED_DOMAINS=gmail.com
 ```
 
-O frontend usa o Google Identity Services, envia o ID token ao backend, que valida a credencial, cria uma sessão assinada (cookie `HttpOnly`) e libera a API. `MEDIA_CONVERTER_GOOGLE_ALLOWED_DOMAINS` é opcional e restringe o acesso a determinados domínios de e-mail.
+O frontend usa o Google Identity Services, envia o ID token ao backend, que valida a credencial, cria uma sessão assinada (cookie `HttpOnly`) e libera a API. `MEDIA_CONVERTER_GOOGLE_ALLOWED_DOMAINS` é opcional e restringe o acesso a determinados domínios de e-mail. Aceita domínios (`gmail.com`) ou e-mails exatos (`cleberleonheart@gmail.com`), separados por vírgula.
 
 ### Autenticação básica
 
