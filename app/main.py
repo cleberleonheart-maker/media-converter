@@ -21,6 +21,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from .auth import (
     SESSION_COOKIE_NAME,
     AuthError,
+    LoginRateLimiter,
     Session,
     create_session_token,
     verify_google_credential,
@@ -238,6 +239,10 @@ class JobResponse(BaseModel):
 def build_app(config: Settings = settings) -> FastAPI:
     store = JobStore(config)
     service = JobService(config, store)
+    login_limiter = LoginRateLimiter(
+        config.login_max_failures,
+        config.login_failure_window_seconds,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -281,6 +286,13 @@ def build_app(config: Settings = settings) -> FastAPI:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="O login com Google não está configurado.",
             )
+        client_host = request.client.host if request.client else "desconhecido"
+        if login_limiter.is_blocked(client_host):
+            logger.warning("Login Google bloqueado por excesso de falhas: %s", client_host)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Muitas tentativas de login. Aguarde alguns minutos e tente novamente.",
+            )
         try:
             payload = await request.json()
         except (ValueError, json.JSONDecodeError) as exc:
@@ -301,7 +313,11 @@ def build_app(config: Settings = settings) -> FastAPI:
                 config.google_allowed_domains,
             )
         except AuthError as exc:
+            login_limiter.record_failure(client_host)
+            logger.warning("Login Google negado para %s: %s", client_host, exc)
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+        login_limiter.reset(client_host)
+        logger.info("Login Google concluído: %s", email)
         token = create_session_token(email, config.session_secret, config.session_ttl_seconds)
         response = JSONResponse({"email": email, "authenticated": True})
         response.set_cookie(

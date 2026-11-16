@@ -44,6 +44,7 @@ const elements = {
   loginError: document.querySelector("#login-error"),
   googleButton: document.querySelector("#google-button"),
   logoutButton: document.querySelector("#logout-button"),
+  installButton: document.querySelector("#install-button"),
 };
 
 const statusLabels = {
@@ -612,8 +613,37 @@ elements.jobsList.addEventListener("click", (event) => {
   else removeJob(jobId, button);
 });
 
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
+
+function setupInstallPrompt() {
+  let promptEvent = null;
+  window.addEventListener("beforeinstallprompt", (event) => {
+    event.preventDefault();
+    promptEvent = event;
+    if (elements.installButton) elements.installButton.hidden = false;
+  });
+  elements.installButton?.addEventListener("click", async () => {
+    if (!promptEvent) return;
+    promptEvent.prompt();
+    await promptEvent.userChoice;
+    promptEvent = null;
+    elements.installButton.hidden = true;
+  });
+  window.addEventListener("appinstalled", () => {
+    promptEvent = null;
+    if (elements.installButton) elements.installButton.hidden = true;
+  });
+}
+
 setSource("upload");
 syncQualityAvailability();
+registerServiceWorker();
+setupInstallPrompt();
 checkAuth().then((authenticated) => {
   if (authenticated) loadInitialJobs();
 });

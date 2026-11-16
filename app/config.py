@@ -47,6 +47,8 @@ class Settings:
     google_allowed_domains: tuple[str, ...] = ()
     session_secret: str = ""
     session_ttl_seconds: int = 24 * 60 * 60
+    login_max_failures: int = 20
+    login_failure_window_seconds: int = 600
     allow_private_hosts: bool = False
     download_timeout_seconds: int = 120
     download_total_timeout_seconds: int = 60 * 60 * 12
@@ -75,6 +77,8 @@ class Settings:
             "max_duration_seconds": self.max_duration_seconds,
             "max_video_pixels": self.max_video_pixels,
             "session_ttl_seconds": self.session_ttl_seconds,
+            "login_max_failures": self.login_max_failures,
+            "login_failure_window_seconds": self.login_failure_window_seconds,
         }
         for name, value in positive_values.items():
             if value <= 0:
@@ -157,6 +161,15 @@ class Settings:
                 os.getenv(
                     "MEDIA_CONVERTER_SESSION_TTL_SECONDS",
                     str(defaults.session_ttl_seconds),
+                )
+            ),
+            login_max_failures=int(
+                os.getenv("MEDIA_CONVERTER_LOGIN_MAX_FAILURES", str(defaults.login_max_failures))
+            ),
+            login_failure_window_seconds=int(
+                os.getenv(
+                    "MEDIA_CONVERTER_LOGIN_FAILURE_WINDOW_SECONDS",
+                    str(defaults.login_failure_window_seconds),
                 )
             ),
             allow_private_hosts=os.getenv("MEDIA_CONVERTER_ALLOW_PRIVATE_HOSTS", "").strip().lower()

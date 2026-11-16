@@ -7,6 +7,7 @@ import pytest
 
 from app.auth import (
     AuthError,
+    LoginRateLimiter,
     create_session_token,
     verify_google_credential,
     verify_session_token,
@@ -158,3 +159,33 @@ async def test_verify_google_credential_rejects_invalid_response() -> None:
             "client-id",
             transport=_transport({}, status_code=401),
         )
+
+
+def test_rate_limiter_blocks_after_max_failures() -> None:
+    limiter = LoginRateLimiter(max_failures=3, window_seconds=60)
+
+    for _ in range(3):
+        limiter.record_failure("1.2.3.4")
+
+    assert limiter.is_blocked("1.2.3.4")
+    assert not limiter.is_blocked("5.6.7.8")
+
+
+def test_rate_limiter_reset_clears_failures() -> None:
+    limiter = LoginRateLimiter(max_failures=2, window_seconds=60)
+
+    limiter.record_failure("1.2.3.4")
+    limiter.record_failure("1.2.3.4")
+    assert limiter.is_blocked("1.2.3.4")
+
+    limiter.reset("1.2.3.4")
+
+    assert not limiter.is_blocked("1.2.3.4")
+
+
+def test_rate_limiter_ignores_old_failures() -> None:
+    limiter = LoginRateLimiter(max_failures=1, window_seconds=0)
+
+    limiter.record_failure("1.2.3.4")
+
+    assert not limiter.is_blocked("1.2.3.4")

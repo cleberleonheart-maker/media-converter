@@ -148,6 +148,33 @@ def test_google_login_creates_session(monkeypatch: pytest.MonkeyPatch) -> None:
             assert jobs.status_code == 200
 
 
+def test_google_login_rate_limit_blocks_repeated_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.auth import AuthError
+
+    async def fake_verify(credential: str, client_id: str, allowed_domains: tuple[str, ...]) -> str:
+        raise AuthError("Credencial inválida.")
+
+    monkeypatch.setattr("app.main.verify_google_credential", fake_verify)
+
+    with tempfile.TemporaryDirectory() as directory:
+        config = Settings(
+            data_dir=Path(directory),
+            trusted_hosts=("testserver",),
+            google_client_id="client-id",
+            session_secret="segredo",
+            login_max_failures=3,
+        )
+        app = build_app(config)
+        with TestClient(app) as test_client:
+            for _ in range(3):
+                failed = test_client.post("/api/auth/google", json={"credential": "x"})
+                assert failed.status_code == 401
+
+            blocked = test_client.post("/api/auth/google", json={"credential": "x"})
+
+            assert blocked.status_code == 429
+
+
 def test_rejects_oversized_content_length(client: TestClient) -> None:
     response = client.post(
         "/api/jobs/url",

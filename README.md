@@ -15,6 +15,8 @@ Aplicação web para converter arquivos locais, links diretos ou vídeos online 
 - Download, cancelamento e remoção dos resultados.
 - Armazenamento local com limpeza automática após 24 horas.
 - Limites de fila, duração, resolução, tamanho de entrada e tamanho de saída.
+- Login com Google (sessão em cookie `HttpOnly`) com rate limiting e log de tentativas negadas.
+- Instalável como aplicativo web (PWA): "Adicionar à tela inicial" no celular.
 
 ## Execução com Docker
 
@@ -71,6 +73,8 @@ Acesse `http://localhost:8000`. A documentação interativa da API fica em `http
 | `MEDIA_CONVERTER_GOOGLE_ALLOWED_DOMAINS` | vazio | Domínios (`gmail.com`) ou e-mails exatos (`cleberleonheart@gmail.com`) autorizados a usar o conversor, separados por vírgula |
 | `MEDIA_CONVERTER_SESSION_SECRET` | vazio | Chave usada para assinar a sessão do login com Google |
 | `MEDIA_CONVERTER_SESSION_TTL_SECONDS` | `86400` | Validade da sessão em segundos |
+| `MEDIA_CONVERTER_LOGIN_MAX_FAILURES` | `20` | Tentativas de login com Google aceitas por origem antes do bloqueio temporário |
+| `MEDIA_CONVERTER_LOGIN_FAILURE_WINDOW_SECONDS` | `600` | Janela, em segundos, usada para contar as falhas de login |
 
 Para permitir outra plataforma no yt-dlp, adicione o domínio à lista. Hosts públicos com extensão de mídia são aceitos como link direto; um host desconhecido sem extensão compatível é rejeitado.
 
@@ -120,6 +124,34 @@ ExecStart=
 ExecStart=/usr/sbin/tailscaled --state=/var/lib/tailscale/tailscaled.state --socket=/run/tailscale/tailscaled.sock --port=41641 --tun=tailscale
 ```
 
+### Tailscale Funnel (acesso público com URL fixa)
+
+O Funnel publica o mesmo endereço HTTPS (`https://media-converter.tail045fd4.ts.net`) também na internet, sem precisar de domínio próprio. O comando é idempotente e pode ser executado por uma unit de sistema:
+
+```bash
+sudo tailscale funnel --bg 8000
+```
+
+```ini
+[Unit]
+Description=Media Converter via Tailscale Funnel
+After=network-online.target tailscaled.service
+Requires=tailscaled.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/tailscale funnel --bg 8000
+ExecStop=/usr/bin/tailscale funnel --https=443 off
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Como o Funnel deixa o serviço público, mantenha o login com Google ativo e restrito a contas específicas (`MEDIA_CONVERTER_GOOGLE_ALLOWED_DOMAINS`).
+
 ### Login com Google
 
 Crie um cliente OAuth 2.0 do tipo **aplicativo web** no [Google Cloud Console](https://console.cloud.google.com/apis/credentials) e adicione as origens autorizadas (por exemplo `https://media-converter.tail045fd4.ts.net` e `http://localhost:8000`). Depois configure:
@@ -166,7 +198,8 @@ Adicione o domínio do túnel em `MEDIA_CONVERTER_TRUSTED_HOSTS` (por exemplo `*
 - O download direto valida e fixa o IP de cada destino de redirecionamento, mantendo Host/SNI originais.
 - O yt-dlp realiza as próprias requisições e redirects. Para uso remoto, aplique uma política de egress que bloqueie redes internas e adicione autenticação e ownership por usuário. Defina `MEDIA_CONVERTER_YTDLP_PROXY` para encaminhar todo o tráfego do yt-dlp por um proxy de saída controlado.
 - Cookies do yt-dlp são credenciais sensíveis: use arquivo com permissão `600`, não versione seu conteúdo e monte-o somente leitura no container.
-- A API não implementa autenticação por usuário: a proteção disponível é autenticação básica única (`MEDIA_CONVERTER_AUTH_USER`/`MEDIA_CONVERTER_AUTH_PASSWORD`). Para acesso multiusuário, adicione isolamento por proprietário, TLS, rate limiting e firewall de egress.
+- A API não implementa autenticação por usuário: a proteção disponível é autenticação básica única (`MEDIA_CONVERTER_AUTH_USER`/`MEDIA_CONVERTER_AUTH_PASSWORD`) ou o login com Google restrito a contas específicas. Para acesso multiusuário, adicione isolamento por proprietário, TLS, rate limiting e firewall de egress.
+- O login com Google aplica rate limiting por origem (`MEDIA_CONVERTER_LOGIN_MAX_FAILURES` falhas em `MEDIA_CONVERTER_LOGIN_FAILURE_WINDOW_SECONDS`) e registra no log os logins negados, sem gravar credenciais.
 
 ## Qualidade e formatos
 

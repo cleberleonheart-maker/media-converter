@@ -117,6 +117,21 @@ select:focus-visible,
   border-color: var(--accent);
 }
 
+.install-button {
+  padding: 8px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.8rem;
+  background: transparent;
+  cursor: pointer;
+}
+
+.install-button:hover {
+  border-color: var(--text);
+}
+
 .login-screen {
   display: grid;
   min-height: 70vh;

@@ -24,6 +24,43 @@ class Session:
     expires_at: int
 
 
+class LoginRateLimiter:
+    """Limita tentativas de login por origem em janela deslizante."""
+
+    def __init__(self, max_failures: int = 20, window_seconds: int = 600) -> None:
+        self.max_failures = max_failures
+        self.window_seconds = window_seconds
+        self._failures: dict[str, list[float]] = {}
+
+    def _prune(self, key: str, now: float) -> list[float]:
+        failures = [
+            stamp for stamp in self._failures.get(key, []) if now - stamp < self.window_seconds
+        ]
+        if failures:
+            self._failures[key] = failures
+        else:
+            self._failures.pop(key, None)
+        return failures
+
+    def is_blocked(self, key: str) -> bool:
+        now = time.monotonic()
+        if len(self._failures) > 1000:
+            self._failures = {
+                stored_key: stamps
+                for stored_key, stamps in self._failures.items()
+                if any(now - stamp < self.window_seconds for stamp in stamps)
+            }
+        return len(self._prune(key, now)) >= self.max_failures
+
+    def record_failure(self, key: str) -> None:
+        now = time.monotonic()
+        self._prune(key, now)
+        self._failures.setdefault(key, []).append(now)
+
+    def reset(self, key: str) -> None:
+        self._failures.pop(key, None)
+
+
 def _b64encode(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode().rstrip("=")
 
