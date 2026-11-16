@@ -41,6 +41,8 @@ class Settings:
     ytdlp_cookies_file: Path | None = None
     ytdlp_cookies_from_browser: str = ""
     ytdlp_js_runtimes: tuple[str, ...] = ()
+    auth_user: str = ""
+    auth_password: str = ""
     allow_private_hosts: bool = False
     download_timeout_seconds: int = 120
     download_total_timeout_seconds: int = 60 * 60 * 12
@@ -74,6 +76,8 @@ class Settings:
                 raise ValueError(f"{name} deve ser maior que zero.")
         if not self.trusted_hosts:
             raise ValueError("É necessário definir pelo menos um host confiável.")
+        if bool(self.auth_user) != bool(self.auth_password):
+            raise ValueError("Defina usuário e senha de autenticação ou nenhum dos dois.")
         if self.ytdlp_cookies_file is not None and self.ytdlp_cookies_from_browser:
             raise ValueError("Configure cookies do yt-dlp por arquivo ou por navegador, não ambos.")
         if self.ytdlp_cookies_file is not None:
@@ -131,6 +135,8 @@ class Settings:
                 defaults.ytdlp_cookies_from_browser,
             ).strip(),
             ytdlp_js_runtimes=js_runtimes,
+            auth_user=os.getenv("MEDIA_CONVERTER_AUTH_USER", defaults.auth_user).strip(),
+            auth_password=os.getenv("MEDIA_CONVERTER_AUTH_PASSWORD", defaults.auth_password),
             allow_private_hosts=os.getenv("MEDIA_CONVERTER_ALLOW_PRIVATE_HOSTS", "").strip().lower()
             in {"1", "true", "yes", "on"},
             download_timeout_seconds=int(

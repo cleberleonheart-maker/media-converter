@@ -54,6 +54,37 @@ def test_rejects_untrusted_host(client: TestClient) -> None:
     assert response.status_code == 400
 
 
+def test_basic_auth_requires_credentials() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        config = Settings(
+            data_dir=Path(directory),
+            trusted_hosts=("testserver",),
+            auth_user="admin",
+            auth_password="s3cret",
+        )
+        app = build_app(config)
+        with TestClient(app) as test_client:
+            unauthorized = test_client.get("/api/jobs")
+            assert unauthorized.status_code == 401
+
+            authorized = test_client.get("/api/jobs", auth=("admin", "s3cret"))
+            assert authorized.status_code == 200
+
+            wrong = test_client.get("/api/jobs", auth=("admin", "errada"))
+            assert wrong.status_code == 401
+
+            health = test_client.get("/api/health")
+            assert health.status_code == 200
+
+
+def test_auth_requires_user_and_password() -> None:
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        pytest.raises(ValueError, match="usuário e senha"),
+    ):
+        Settings(data_dir=Path(directory), auth_user="admin")
+
+
 def test_rejects_oversized_content_length(client: TestClient) -> None:
     response = client.post(
         "/api/jobs/url",

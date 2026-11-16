@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
+import secrets
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -116,6 +118,39 @@ class RequestBodyLimitMiddleware:
         await self.app(scope, limited_receive, send)
 
 
+class BasicAuthMiddleware:
+    def __init__(self, app: ASGIApp, username: str, password: str) -> None:
+        self.app = app
+        self.username = username
+        self.password = password
+        self.expected = "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path == "/api/health":
+            await self.app(scope, receive, send)
+            return
+
+        headers = {
+            key.decode("latin-1").lower(): value.decode("latin-1")
+            for key, value in scope.get("headers", [])
+        }
+        provided = headers.get("authorization", "")
+        if not secrets.compare_digest(provided, self.expected):
+            await JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"detail": "Autenticação necessária."},
+                headers={"WWW-Authenticate": 'Basic realm="Media Converter"'},
+            )(scope, receive, send)
+            return
+
+        await self.app(scope, receive, send)
+
+
 class UrlJobRequest(BaseModel):
     url: str = Field(min_length=8, max_length=2048)
     output_format: OutputFormat = OutputFormat.MP4
@@ -179,6 +214,12 @@ def build_app(config: Settings = settings) -> FastAPI:
         max_body_bytes=config.max_upload_bytes + 1024 * 1024,
         can_accept_job=store.can_accept_job,
     )
+    if config.auth_user and config.auth_password:
+        app.add_middleware(
+            BasicAuthMiddleware,
+            username=config.auth_user,
+            password=config.auth_password,
+        )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(config.trusted_hosts))
 
     @app.exception_handler(RequestBodyTooLarge)

@@ -65,6 +65,8 @@ Acesse `http://localhost:8000`. A documentação interativa da API fica em `http
 | `MEDIA_CONVERTER_YTDLP_COOKIES_FILE` | vazio | Arquivo `cookies.txt` no formato Netscape usado pelo yt-dlp |
 | `MEDIA_CONVERTER_YTDLP_COOKIES_FROM_BROWSER` | vazio | Perfil de navegador de onde o yt-dlp extrairá cookies |
 | `MEDIA_CONVERTER_YTDLP_JS_RUNTIMES` | vazio | Runtimes JavaScript usados pelo yt-dlp (ex.: `node:/usr/bin/node`, `deno`), separados por vírgula |
+| `MEDIA_CONVERTER_AUTH_USER` | vazio | Usuário da autenticação básica obrigatória para expor o serviço |
+| `MEDIA_CONVERTER_AUTH_PASSWORD` | vazio | Senha da autenticação básica |
 
 Para permitir outra plataforma no yt-dlp, adicione o domínio à lista. Hosts públicos com extensão de mídia são aceitos como link direto; um host desconhecido sem extensão compatível é rejeitado.
 
@@ -89,6 +91,23 @@ MEDIA_CONVERTER_YTDLP_JS_RUNTIMES=node:/usr/bin/node
 
 São aceitos Node 22 ou superior e Deno 2.3 ou superior. Sem runtime, vídeos bloqueados por idade podem falhar mesmo com cookies válidos.
 
+## Exposição pública
+
+Defina `MEDIA_CONVERTER_AUTH_USER` e `MEDIA_CONVERTER_AUTH_PASSWORD` para exigir autenticação básica em todas as rotas, exceto `/api/health`:
+
+```bash
+MEDIA_CONVERTER_AUTH_USER=admin
+MEDIA_CONVERTER_AUTH_PASSWORD=uma-senha-forte
+```
+
+Em máquinas sem IP público direto, use um túnel HTTPS do Cloudflare, que só precisa de conexão de saída:
+
+```bash
+cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8000
+```
+
+Adicione o domínio do túnel em `MEDIA_CONVERTER_TRUSTED_HOSTS` (por exemplo `*.trycloudflare.com`). O endereço do túnel rápido muda a cada reinício; para um endereço fixo, use um túnel nomeado com domínio próprio.
+
 ## Segurança e limites
 
 - Requisições `/api` aceitam apenas os hosts definidos em `MEDIA_CONVERTER_TRUSTED_HOSTS`.
@@ -102,7 +121,7 @@ São aceitos Node 22 ou superior e Deno 2.3 ou superior. Sem runtime, vídeos bl
 - O download direto valida e fixa o IP de cada destino de redirecionamento, mantendo Host/SNI originais.
 - O yt-dlp realiza as próprias requisições e redirects. Para uso remoto, aplique uma política de egress que bloqueie redes internas e adicione autenticação e ownership por usuário. Defina `MEDIA_CONVERTER_YTDLP_PROXY` para encaminhar todo o tráfego do yt-dlp por um proxy de saída controlado.
 - Cookies do yt-dlp são credenciais sensíveis: use arquivo com permissão `600`, não versione seu conteúdo e monte-o somente leitura no container.
-- A API não implementa autenticação. Para acesso multiusuário, adicione autenticação,isolamento por proprietário, TLS, rate limiting e firewall de egress.
+- A API não implementa autenticação por usuário: a proteção disponível é autenticação básica única (`MEDIA_CONVERTER_AUTH_USER`/`MEDIA_CONVERTER_AUTH_PASSWORD`). Para acesso multiusuário, adicione isolamento por proprietário, TLS, rate limiting e firewall de egress.
 
 ## Qualidade e formatos
 
