@@ -13,6 +13,7 @@ Aplicação web para converter arquivos locais, links diretos ou vídeos online 
 - Links diretos públicos com extensão de mídia compatível.
 - Conversão com FFmpeg e progresso real de download e conversão.
 - Download, cancelamento e remoção dos resultados.
+- Publicação automática dos arquivos convertidos em uma biblioteca local (por exemplo, a pasta `IPTV_MEDIA_DIR` do player IPTV).
 - Armazenamento local com limpeza automática após 24 horas.
 - Limites de fila, duração, resolução, tamanho de entrada e tamanho de saída.
 - Login com Google (sessão em cookie `HttpOnly`) com rate limiting e log de tentativas negadas.
@@ -68,6 +69,7 @@ Acesse `http://localhost:8000`. A documentação interativa da API fica em `http
 | `MEDIA_CONVERTER_YTDLP_COOKIES_FILE` | vazio | Arquivo `cookies.txt` no formato Netscape usado pelo yt-dlp |
 | `MEDIA_CONVERTER_YTDLP_COOKIES_FROM_BROWSER` | vazio | Perfil de navegador de onde o yt-dlp extrairá cookies |
 | `MEDIA_CONVERTER_YTDLP_JS_RUNTIMES` | vazio | Runtimes JavaScript usados pelo yt-dlp (ex.: `node:/usr/bin/node`, `deno`), separados por vírgula |
+| `MEDIA_CONVERTER_LIBRARY_DIR` | vazio | Pasta onde os arquivos convertidos são publicados ao terminar (ex.: a biblioteca do player IPTV) |
 | `MEDIA_CONVERTER_AUTH_USER` | vazio | Usuário da autenticação básica obrigatória para expor o serviço |
 | `MEDIA_CONVERTER_AUTH_PASSWORD` | vazio | Senha da autenticação básica |
 | `MEDIA_CONVERTER_GOOGLE_CLIENT_ID` | vazio | Client ID do OAuth 2.0 usado no login com Google |

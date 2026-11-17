@@ -41,6 +41,7 @@ class Settings:
     ytdlp_cookies_file: Path | None = None
     ytdlp_cookies_from_browser: str = ""
     ytdlp_js_runtimes: tuple[str, ...] = ()
+    library_dir: Path | None = None
     auth_user: str = ""
     auth_password: str = ""
     google_client_id: str = ""
@@ -132,8 +133,14 @@ class Settings:
             cookies_file: Path | None = cookies_path.resolve()
         else:
             cookies_file = None
+        library_value = os.getenv("MEDIA_CONVERTER_LIBRARY_DIR", "").strip()
+        if library_value:
+            library_dir: Path | None = Path(library_value).expanduser().resolve()
+        else:
+            library_dir = None
         return cls(
             data_dir=data_dir,
+            library_dir=library_dir,
             max_upload_bytes=int(
                 os.getenv("MEDIA_CONVERTER_MAX_UPLOAD_BYTES", str(defaults.max_upload_bytes))
             ),

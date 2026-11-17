@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -44,6 +45,8 @@ from .url_validation import (
     pinned_connection,
     resolve_public_url_async,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class JobCapacityError(RuntimeError):
@@ -366,6 +369,26 @@ class JobStore:
             output_name=output_path.name,
             output_size=safe_file_size(output_path),
         )
+        self.publish_to_library(output_path)
+
+    def publish_to_library(self, output_path: Path) -> None:
+        library = self.config.library_dir
+        if not library:
+            return
+        try:
+            library.mkdir(parents=True, exist_ok=True)
+            target = library / output_path.name
+            if target.exists():
+                if target.stat().st_size == output_path.stat().st_size:
+                    return
+                target.unlink()
+            try:
+                os.link(output_path, target)
+            except OSError:
+                shutil.copy2(output_path, target)
+            logger.info("Arquivo publicado na biblioteca: %s", target)
+        except OSError:
+            logger.warning("Não foi possível publicar o arquivo na biblioteca.", exc_info=True)
 
     async def _run_ffmpeg(
         self,

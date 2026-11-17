@@ -397,3 +397,37 @@ async def test_direct_download_rejects_known_oversized_file(
 
 def _raise_os_error(*args: object, **kwargs: object) -> None:
     raise OSError("disco ocupado")
+
+
+def test_publish_to_library_creates_link(tmp_path: Path) -> None:
+    from app.jobs import JobStore
+
+    config = Settings(data_dir=tmp_path / "data", library_dir=tmp_path / "library")
+    store = JobStore(config)
+    output = tmp_path / "data" / "video.mp4"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"conteudo")
+
+    store.publish_to_library(output)
+
+    published = tmp_path / "library" / "video.mp4"
+    assert published.read_bytes() == b"conteudo"
+    assert published.stat().st_ino == output.stat().st_ino
+
+
+def test_publish_to_library_is_idempotent(tmp_path: Path) -> None:
+    from app.jobs import JobStore
+
+    config = Settings(data_dir=tmp_path / "data", library_dir=tmp_path / "library")
+    store = JobStore(config)
+    output = tmp_path / "data" / "video.mp4"
+    output.parent.mkdir(parents=True)
+    output.write_bytes(b"conteudo")
+
+    store.publish_to_library(output)
+    published = tmp_path / "library" / "video.mp4"
+    first = published.stat().st_ino
+
+    store.publish_to_library(output)
+
+    assert published.stat().st_ino == first
